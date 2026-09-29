@@ -1,120 +1,67 @@
-# FastAPI Project - Frontend
+# Frontend RetroVault
 
-The frontend is built with [Vite](https://vitejs.dev/), [React](https://reactjs.org/), [TypeScript](https://www.typescriptlang.org/), [TanStack Query](https://tanstack.com/query), [TanStack Router](https://tanstack.com/router) and [Tailwind CSS](https://tailwindcss.com/).
+O frontend é um shell React/Vite para o ambiente Sandbox da RetroVault. Ele
+exibe a versão informada pela API, mantém o banner de demonstração e não
+implementa catálogo, autenticação, checkout ou painel — essas capacidades
+pertencem às histórias seguintes.
 
-## Requirements
+## Desenvolvimento local
 
-- [Bun](https://bun.sh/) (recommended) or [Node.js](https://nodejs.org/)
-
-## Quick Start
-
-```bash
-bun install
-bun run dev
-```
-
-* Then open your browser at http://localhost:5173/.
-
-Run `uv run bash scripts/prestart.sh` and `uv run fastapi dev` from the `backend` directory, with PostgreSQL running in Docker Compose. See [../development.md](../development.md) for the complete setup.
-
-To serve the frontend with FastAPI, run `bun run build` from the `frontend` directory and open `http://localhost:8000`.
-
-Check the file `package.json` to see other available options.
-
-### Removing the frontend
-
-If you are developing an API-only app and want to remove the frontend, you can do it easily:
-
-* Remove the `./frontend` directory.
-
-* In the `backend/app/main.py` file, remove the `app.frontend()` call.
-
-* In the `backend/Dockerfile` file, remove the frontend build stage and the `COPY --from=frontend-build` instruction.
-
-* In the `compose.override.yml` file, remove the `playwright` service.
-
-* In the `.github/workflows/deploy.yml` file, remove the **Set up Bun**, **Install frontend dependencies**, and **Build frontend** steps.
-
-* In the `.fastapicloudignore` file, remove the `!backend/app/frontend/` entry.
-
-Done, you have a frontend-less (api-only) app. 🤓
-
-## Generate Client
-
-### Automatically
-
-* From the top level project directory, run the script:
+Na raiz do repositório, instale as dependências travadas:
 
 ```bash
-bash ./scripts/generate-client.sh
+bun install --frozen-lockfile
 ```
 
-* Commit the changes.
-
-### Manually
-
-* Make sure the backend is running.
-
-* Download the OpenAPI JSON file from `http://localhost:8000/api/v1/openapi.json` and copy it to a new file `openapi.json` at the root of the `frontend` directory.
-
-* To generate the frontend client, run:
+Inicie API, banco e frontend juntos:
 
 ```bash
-bun run generate-client
+docker compose up --wait
 ```
 
-* Commit the changes.
+Abra `http://localhost:5173`. O Compose fornece `VITE_API_URL` e
+`VITE_APP_VERSION`. Fora do Compose, `frontend/.env.development` aponta o
+servidor Vite local para a API em `http://localhost:8000`; esse valor não é
+incluído em builds de produção.
 
-Notice that everytime the backend changes (changing the OpenAPI schema), you should follow these steps again to update the frontend client.
-
-## Using a Remote API
-
-By default, the built frontend uses the same origin as the FastAPI app. If you want to use a remote API while running the Vite development server, you can set the environment variable `VITE_API_URL` to the URL of the remote API. For example, you can set it in the `frontend/.env` file:
-
-```env
-VITE_API_URL=https://my-domain.example.com
-```
-
-Then, when you run the frontend, it will use that URL as the base URL for the API.
-
-## Code Structure
-
-The frontend code is structured as follows:
-
-* `frontend/src` - The main frontend code.
-* `frontend/src/assets` - Static assets.
-* `frontend/src/client` - The generated OpenAPI client.
-* `frontend/src/components` -  The different components of the frontend.
-* `frontend/src/hooks` - Custom hooks.
-* `frontend/src/routes` - The different routes of the frontend which include the pages.
-
-## End-to-End Testing with Playwright
-
-The frontend includes initial end-to-end tests using Playwright. To run the tests, you need to have the Docker Compose stack running. Start the stack with the following command:
+Para iniciar somente o Vite:
 
 ```bash
-docker compose run --rm backend bash scripts/prestart.sh
-docker compose up -d --wait backend
+bun run --cwd frontend dev
 ```
 
-Then, you can run the tests with the following command:
+## Contrato OpenAPI
+
+O contrato e o cliente TypeScript são artefatos versionados. Após uma mudança
+de API, a partir da raiz do repositório, execute:
 
 ```bash
-bunx playwright test
+scripts/generate-client.sh
+scripts/check-contracts.sh
 ```
 
-You can also run your tests in UI mode to see the browser and interact with it running:
+O segundo comando falha se o OpenAPI, o cliente gerado ou o manifesto não
+estiverem sincronizados.
+
+## Testes
+
+Instale o Chromium do Playwright uma vez no host:
 
 ```bash
-bunx playwright test --ui
+bunx playwright install chromium
 ```
 
-To stop and remove the Docker Compose stack and clean the data created in tests, use the following command:
+Execute os testes de acessibilidade e responsividade em desktop e celular:
 
 ```bash
-docker compose down -v
+bun run --cwd frontend test
 ```
 
-To update the tests, navigate to the tests directory and modify the existing test files or add new ones as needed.
+Para verificar também a integração real entre a pilha Compose, a API e o
+frontend, execute:
 
-For more information on writing and running Playwright tests, refer to the official [Playwright documentation](https://playwright.dev/docs/intro).
+```bash
+scripts/compose-smoke.sh
+```
+
+O smoke usa um projeto Compose isolado e remove apenas os recursos que criou.

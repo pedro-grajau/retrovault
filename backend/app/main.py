@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
@@ -10,6 +11,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
 from app.platform.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class VersionResponse(BaseModel):
@@ -42,7 +45,11 @@ def correlation_id(request: Request) -> UUID:
 @app.middleware("http")
 async def add_correlation_header(request: Request, call_next):  # type: ignore[no-untyped-def]
     request.state.correlation_id = correlation_id(request)
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as error:
+        logger.exception("Unhandled request error")
+        response = await internal_problem(request, error)
     response.headers["X-Correlation-ID"] = str(request.state.correlation_id)
     return response
 
@@ -61,7 +68,12 @@ async def http_problem(request: Request, error: StarletteHTTPException) -> JSONR
         code="not_found" if error.status_code == 404 else "http_error",
         correlation_id=request.state.correlation_id,
     )
-    return JSONResponse(problem.model_dump(mode="json"), status_code=error.status_code, media_type="application/problem+json")
+    return JSONResponse(
+        problem.model_dump(mode="json"),
+        status_code=error.status_code,
+        headers=error.headers,
+        media_type="application/problem+json",
+    )
 
 
 @app.exception_handler(Exception)

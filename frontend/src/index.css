@@ -1,13 +1,13 @@
 :root {
   color-scheme: dark;
-  --bg: #080a12;
-  --surface: #111526;
-  --text: #f4f2ff;
-  --muted: #b8bed2;
-  --pink: #ff4fd8;
-  --cyan: #43e7ff;
-  --line: #303750;
-  font-family: "Space Grotesk", sans-serif;
+  --bg: #0b1020;
+  --surface: #111a31;
+  --text: #f6f2e8;
+  --muted: #b8c2d9;
+  --accent: #8d7cff;
+  --primary: #7cff6b;
+  --line: #39466a;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 }
 * {
   box-sizing: border-box;
@@ -32,15 +32,15 @@ a {
   top: -5rem;
   z-index: 10;
   padding: 0.75rem 1rem;
-  background: var(--cyan);
-  color: #02040a;
+  background: var(--primary);
+  color: #08120a;
   font-weight: 700;
 }
 .skip-link:focus {
   top: 1rem;
 }
 :focus-visible {
-  outline: 3px solid var(--cyan);
+  outline: 3px solid var(--primary);
   outline-offset: 4px;
 }
 .sandbox {
@@ -52,7 +52,7 @@ a {
   padding: 0.5rem 1rem;
   color: #090311;
   background: #ffd44a;
-  font-family: "IBM Plex Mono", monospace;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   text-align: center;
 }
 .sandbox strong {
@@ -79,14 +79,14 @@ footer {
   letter-spacing: 0.08em;
 }
 .brand span {
-  color: var(--pink);
+  color: var(--accent);
 }
 .hero h1 span {
-  color: var(--pink);
+  color: var(--accent);
 }
 .status {
   color: var(--muted);
-  font-family: "IBM Plex Mono", monospace;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 0.8rem;
 }
 main {
@@ -96,9 +96,9 @@ main {
   max-width: 900px;
 }
 .eyebrow {
-  color: var(--cyan);
+  color: var(--primary);
   font:
-    bold 0.8rem "IBM Plex Mono",
+    bold 0.8rem ui-monospace,
     monospace;
   letter-spacing: 0.16em;
 }
@@ -132,8 +132,8 @@ h1 {
   overflow-wrap: anywhere;
 }
 .facts strong {
-  color: var(--cyan);
-  font-family: "IBM Plex Mono", monospace;
+  color: var(--primary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .facts span {
   color: var(--muted);
@@ -144,7 +144,7 @@ h1 {
   gap: 1rem;
   margin-top: 4rem;
   padding: 1.5rem;
-  border-left: 4px solid var(--pink);
+  border-left: 4px solid var(--accent);
   background: var(--surface);
 }
 .notice h2,
@@ -161,7 +161,7 @@ footer {
   border-top: 1px solid var(--line);
   color: var(--muted);
   font:
-    0.75rem "IBM Plex Mono",
+    0.75rem ui-monospace,
     monospace;
 }
 @media (max-width: 700px) {

@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:18
+    image: postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-retrovault}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -26,12 +26,12 @@ services:
       timeout: 5s
       retries: 10
   frontend:
-    image: oven/bun:1
+    image: oven/bun:1@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895
     working_dir: /workspace/frontend
     command: ["sh", "-c", "bun install --frozen-lockfile && bun run dev --host 0.0.0.0"]
     volumes:
       - ".:/workspace"
-      - "frontend-node-modules:/workspace/node_modules"
+      - "frontend-node-modules:/workspace/frontend/node_modules"
     environment:
       VITE_API_URL: http://localhost:8000
       VITE_APP_VERSION: ${APP_VERSION:-dev}
