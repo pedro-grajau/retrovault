@@ -16,6 +16,7 @@ jobs:
       - run: uv run alembic upgrade head --sql
         working-directory: backend
       - run: bun install --frozen-lockfile
+      - run: bun run --cwd frontend lint
       - run: bun run --cwd frontend build
       - run: scripts/check-contracts.sh
       - run: uv run --project backend python scripts/security-check.py

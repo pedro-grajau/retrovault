@@ -31,6 +31,31 @@ class Problem(BaseModel):
 app = FastAPI(title="RetroVault API", version="1.0.0", openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["GET"], allow_headers=["X-Correlation-ID"], expose_headers=["X-Correlation-ID"])
 
+CORRELATION_ID_PARAMETER = {
+    "name": "X-Correlation-ID",
+    "in": "header",
+    "required": False,
+    "description": "UUID de correlação opcional. Um UUID é gerado quando ele não é informado ou é inválido.",
+    "schema": {"type": "string", "format": "uuid"},
+}
+CORRELATION_ID_RESPONSE_HEADER = {
+    "X-Correlation-ID": {
+        "description": "UUID de correlação da resposta.",
+        "schema": {"type": "string", "format": "uuid"},
+    }
+}
+
+
+def problem_responses(*status_codes: int) -> dict[int, dict[str, object]]:
+    schema = Problem.model_json_schema()
+    return {
+        status_code: {
+            "description": "Resposta de problema padronizada.",
+            "content": {"application/problem+json": {"schema": schema}},
+        }
+        for status_code in status_codes
+    }
+
 
 def correlation_id(request: Request) -> UUID:
     raw_value = request.headers.get("X-Correlation-ID")
@@ -91,11 +116,22 @@ async def internal_problem(request: Request, _: Exception) -> JSONResponse:
     )
 
 
-@app.get("/api/v1/system/version", response_model=VersionResponse, tags=["system"])
+@app.get(
+    "/api/v1/system/version",
+    response_model=VersionResponse,
+    tags=["system"],
+    responses={500: problem_responses(500)[500], 200: {"headers": CORRELATION_ID_RESPONSE_HEADER}},
+    openapi_extra={"parameters": [CORRELATION_ID_PARAMETER]},
+)
 async def version(request: Request) -> VersionResponse:
     return VersionResponse(app_version=settings.app_version, correlation_id=request.state.correlation_id)
 
 
-@app.get("/api/v1/health", tags=["system"])
+@app.get(
+    "/api/v1/health",
+    tags=["system"],
+    responses={500: problem_responses(500)[500], 200: {"headers": CORRELATION_ID_RESPONSE_HEADER}},
+    openapi_extra={"parameters": [CORRELATION_ID_PARAMETER]},
+)
 async def health() -> dict[str, str]:
     return {"status": "ok"}

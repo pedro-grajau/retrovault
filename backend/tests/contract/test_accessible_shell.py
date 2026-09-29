@@ -26,6 +26,29 @@ def test_shell_has_accessible_structural_floor() -> None:
     assert "forced-colors: active" in css
     assert "min-width: 320px" in css
     assert not re.search(r"https?://", css)
-    assert contrast("#f4f2ff", "#080a12") >= 4.5
-    assert contrast("#b8bed2", "#080a12") >= 4.5
-    assert contrast("#090311", "#ffd44a") >= 4.5
+    tokens = {
+        "--bg": "#0b1020",
+        "--surface": "#111a31",
+        "--surface-overlay": "#1a2440",
+        "--text": "#f6f2e8",
+        "--muted": "#b8c2d9",
+        "--primary": "#7cff6b",
+        "--on-primary": "#08120a",
+        "--warning": "#ffcf4a",
+        "--on-warning": "#211900",
+        "--danger": "#ff7a78",
+        "--on-danger": "#230505",
+        "--info": "#64d8ff",
+        "--on-info": "#04161d",
+        "--line": "#39466a",
+        "--line-functional": "#7180aa",
+    }
+    for token, color in tokens.items():
+        assert f"{token}: {color}" in css
+    assert contrast(tokens["--text"], tokens["--bg"]) >= 4.5
+    assert contrast(tokens["--muted"], tokens["--bg"]) >= 4.5
+    assert contrast(tokens["--on-primary"], tokens["--primary"]) >= 4.5
+    assert contrast(tokens["--on-warning"], tokens["--warning"]) >= 4.5
+    assert contrast(tokens["--on-danger"], tokens["--danger"]) >= 4.5
+    assert contrast(tokens["--on-info"], tokens["--info"]) >= 4.5
+    assert contrast(tokens["--line-functional"], tokens["--bg"]) >= 3

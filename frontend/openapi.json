@@ -31,6 +31,18 @@
     "/api/v1/health": {
       "get": {
         "operationId": "health_api_v1_health_get",
+        "parameters": [
+          {
+            "description": "UUID de correla\u00e7\u00e3o opcional. Um UUID \u00e9 gerado quando ele n\u00e3o \u00e9 informado ou \u00e9 inv\u00e1lido.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -44,7 +56,57 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "UUID de correla\u00e7\u00e3o da resposta.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "code": {
+                      "title": "Code",
+                      "type": "string"
+                    },
+                    "correlation_id": {
+                      "format": "uuid",
+                      "title": "Correlation Id",
+                      "type": "string"
+                    },
+                    "status": {
+                      "title": "Status",
+                      "type": "integer"
+                    },
+                    "title": {
+                      "title": "Title",
+                      "type": "string"
+                    },
+                    "type": {
+                      "default": "about:blank",
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "status",
+                    "code",
+                    "correlation_id"
+                  ],
+                  "title": "Problem",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Resposta de problema padronizada."
           }
         },
         "summary": "Health",
@@ -56,6 +118,18 @@
     "/api/v1/system/version": {
       "get": {
         "operationId": "version_api_v1_system_version_get",
+        "parameters": [
+          {
+            "description": "UUID de correla\u00e7\u00e3o opcional. Um UUID \u00e9 gerado quando ele n\u00e3o \u00e9 informado ou \u00e9 inv\u00e1lido.",
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -65,7 +139,57 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Correlation-ID": {
+                "description": "UUID de correla\u00e7\u00e3o da resposta.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "code": {
+                      "title": "Code",
+                      "type": "string"
+                    },
+                    "correlation_id": {
+                      "format": "uuid",
+                      "title": "Correlation Id",
+                      "type": "string"
+                    },
+                    "status": {
+                      "title": "Status",
+                      "type": "integer"
+                    },
+                    "title": {
+                      "title": "Title",
+                      "type": "string"
+                    },
+                    "type": {
+                      "default": "about:blank",
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "status",
+                    "code",
+                    "correlation_id"
+                  ],
+                  "title": "Problem",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Resposta de problema padronizada."
           }
         },
         "summary": "Version",
