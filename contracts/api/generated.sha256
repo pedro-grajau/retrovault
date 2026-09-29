@@ -1,0 +1,5 @@
+4a1c9a60253a858288d93345b6d83045e239412d047a2d9c4bd1c8f497dfa6aa  frontend/openapi.json
+780a350abae0a5af3bde2ec31b258cb2bf4aba6e11199e6824b0d2f156634b1c  frontend/src/client/client.gen.ts
+e26bc8e7e85de405af67d22e8fc7429a8ffc332960ddddc9d13d907cc05e82da  frontend/src/client/index.ts
+422a9233b1572670e196cc32c346e25d6c013004f51955c9822738128e2e5450  frontend/src/client/sdk.gen.ts
+bab0d3ba94152e2dde22e6d4507779a4fc74f53d21dce533a8cc818c23d8ab97  frontend/src/client/types.gen.ts

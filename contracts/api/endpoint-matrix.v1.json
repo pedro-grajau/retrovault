@@ -1,0 +1,1 @@
+{"owner":"platform","version":1,"status":"active","endpoints":[{"method":"GET","path":"/api/v1/health","owner":"platform","auth":"public"},{"method":"GET","path":"/api/v1/system/version","owner":"platform","auth":"public"}]}
