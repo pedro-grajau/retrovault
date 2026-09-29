@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { healthApiV1HealthGetData, healthApiV1HealthGetResponses, versionApiV1SystemVersionGetData, versionApiV1SystemVersionGetResponses } from './types.gen';
+import type { healthApiV1HealthGetData, healthApiV1HealthGetErrors, healthApiV1HealthGetResponses, versionApiV1SystemVersionGetData, versionApiV1SystemVersionGetErrors, versionApiV1SystemVersionGetResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -23,7 +23,7 @@ export class SystemService {
      * Health
      */
     public static healthApiV1HealthGet<ThrowOnError extends boolean = true>(options?: Options<healthApiV1HealthGetData, ThrowOnError>) {
-        return (options?.client ?? client).get<healthApiV1HealthGetResponses, unknown, ThrowOnError>({
+        return (options?.client ?? client).get<healthApiV1HealthGetResponses, healthApiV1HealthGetErrors, ThrowOnError>({
             responseType: 'json',
             url: '/api/v1/health',
             ...options
@@ -34,7 +34,7 @@ export class SystemService {
      * Version
      */
     public static versionApiV1SystemVersionGet<ThrowOnError extends boolean = true>(options?: Options<versionApiV1SystemVersionGetData, ThrowOnError>) {
-        return (options?.client ?? client).get<versionApiV1SystemVersionGetResponses, unknown, ThrowOnError>({
+        return (options?.client ?? client).get<versionApiV1SystemVersionGetResponses, versionApiV1SystemVersionGetErrors, ThrowOnError>({
             responseType: 'json',
             url: '/api/v1/system/version',
             ...options

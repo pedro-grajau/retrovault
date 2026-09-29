@@ -8,12 +8,12 @@ FORBIDDEN_REMOTE_APIS = (
     "graph.facebook.com",
     "api.stripe.com",
 )
-TEXT_SUFFIXES = {".html", ".js", ".json", ".py", ".sh", ".ts", ".tsx", ".yml"}
+TEXT_SUFFIXES = {".html", ".j2", ".js", ".json", ".md", ".py", ".sh", ".toml", ".ts", ".tsx", ".txt", ".yaml", ".yml"}
 
 violations: list[str] = []
 for source_root in SOURCE_ROOTS:
     for path in source_root.rglob("*"):
-        if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
+        if not path.is_file() or (path.suffix not in TEXT_SUFFIXES and not path.name.startswith(".env")):
             continue
         if path.resolve() == Path(__file__).resolve():
             continue

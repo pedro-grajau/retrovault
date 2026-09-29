@@ -18,5 +18,12 @@ class Settings(BaseSettings):
             raise ValueError("APP_VERSION must not be blank")
         return value
 
+    @field_validator("database_url")
+    @classmethod
+    def database_url_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("DATABASE_URL must not be blank")
+        return value
+
 
 settings = Settings()

@@ -1,8 +1,8 @@
 import { defineConfig } from "@hey-api/openapi-ts"
 
 export default defineConfig({
-  input: "./openapi.json",
-  output: "./src/client",
+  input: process.env.OPENAPI_INPUT ?? "./openapi.json",
+  output: process.env.OPENAPI_OUTPUT ?? "./src/client",
 
   plugins: [
     { name: "@hey-api/client-axios", throwOnError: true },

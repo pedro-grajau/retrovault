@@ -6,15 +6,17 @@ import pytest
 from starlette.requests import Request
 
 from app.main import app, internal_problem
+from app.platform.config.settings import settings
 
 
 @pytest.mark.anyio
-async def test_version_exposes_configured_version_and_correlation_id() -> None:
+async def test_version_exposes_configured_version_and_correlation_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "app_version", "test-build-7f3c")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/system/version")
     assert response.status_code == 200
-    assert response.json()["app_version"]
+    assert response.json()["app_version"] == "test-build-7f3c"
     assert response.json()["correlation_id"] == response.headers["X-Correlation-ID"]
 
 
@@ -25,6 +27,15 @@ async def test_correlation_id_is_preserved() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/system/version", headers={"X-Correlation-ID": value})
     assert response.json()["correlation_id"] == value
+
+
+@pytest.mark.anyio
+async def test_frontend_origin_is_allowed_to_read_correlation_header() -> None:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/system/version", headers={"Origin": "http://localhost:5173"})
+    assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+    assert "X-Correlation-ID" in response.headers["Access-Control-Expose-Headers"]
 
 
 @pytest.mark.anyio
@@ -62,3 +73,23 @@ async def test_unexpected_errors_use_problem_contract() -> None:
     assert payload["code"] == "internal_error"
     assert payload["correlation_id"] == str(value)
     assert "sensitive detail" not in response.body.decode()
+
+
+@pytest.mark.anyio
+async def test_unexpected_endpoint_error_keeps_correlation_header() -> None:
+    async def raise_error() -> None:
+        raise RuntimeError("sensitive detail")
+
+    app.add_api_route("/api/v1/test/unexpected-error", raise_error, methods=["GET"])
+    route = app.router.routes[-1]
+    value = str(uuid4())
+    try:
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/test/unexpected-error", headers={"X-Correlation-ID": value})
+    finally:
+        app.router.routes.remove(route)
+    assert response.status_code == 500
+    assert response.headers["X-Correlation-ID"] == value
+    assert response.json()["correlation_id"] == value
+    assert "sensitive detail" not in response.text

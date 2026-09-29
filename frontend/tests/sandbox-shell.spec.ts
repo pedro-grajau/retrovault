@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright"
 import { expect, test } from "@playwright/test"
 
 test("sandbox shell is keyboard accessible and versioned", async ({ page }) => {
@@ -24,6 +25,24 @@ test("sandbox shell is keyboard accessible and versioned", async ({ page }) => {
     page.getByText("api-verified-1.1", { exact: true }),
   ).toBeVisible()
   await expect(page.getByText("APP_VERSION api-verified-1.1")).toBeVisible()
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations).toEqual([])
+})
+
+test("shell renderiza a versão real da API no Compose", async ({ page }) => {
+  test.skip(!process.env.PLAYWRIGHT_REAL_API, "requer a pilha Compose")
+  const versionResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/v1/system/version" &&
+      response.request().resourceType() === "fetch",
+  )
+  await page.goto("/")
+  const apiResponse = await versionResponse
+  expect(apiResponse.ok()).toBe(true)
+  const { app_version } = (await apiResponse.json()) as { app_version: string }
+
+  await expect(page.getByText(app_version, { exact: true })).toBeVisible()
+  await expect(page.getByText(`APP_VERSION ${app_version}`)).toBeVisible()
 })
 
 test("shell does not overflow at 320 CSS px", async ({ page }) => {

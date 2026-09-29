@@ -20,10 +20,48 @@ export type VersionResponse = {
 
 export type healthApiV1HealthGetData = {
     body?: never;
+    headers?: {
+        /**
+         * UUID de correlação opcional. Um UUID é gerado quando ele não é informado ou é inválido.
+         */
+        'X-Correlation-ID'?: string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/health';
 };
+
+export type healthApiV1HealthGetErrors = {
+    /**
+     * Problem
+     *
+     * Resposta de problema padronizada.
+     */
+    500: {
+        /**
+         * Code
+         */
+        code: string;
+        /**
+         * Correlation Id
+         */
+        correlation_id: string;
+        /**
+         * Status
+         */
+        status: number;
+        /**
+         * Title
+         */
+        title: string;
+        /**
+         * Type
+         */
+        type?: string;
+    };
+};
+
+export type healthApiV1HealthGetError = healthApiV1HealthGetErrors[keyof healthApiV1HealthGetErrors];
 
 export type healthApiV1HealthGetResponses = {
     /**
@@ -40,10 +78,48 @@ export type healthApiV1HealthGetResponse = healthApiV1HealthGetResponses[keyof h
 
 export type versionApiV1SystemVersionGetData = {
     body?: never;
+    headers?: {
+        /**
+         * UUID de correlação opcional. Um UUID é gerado quando ele não é informado ou é inválido.
+         */
+        'X-Correlation-ID'?: string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/system/version';
 };
+
+export type versionApiV1SystemVersionGetErrors = {
+    /**
+     * Problem
+     *
+     * Resposta de problema padronizada.
+     */
+    500: {
+        /**
+         * Code
+         */
+        code: string;
+        /**
+         * Correlation Id
+         */
+        correlation_id: string;
+        /**
+         * Status
+         */
+        status: number;
+        /**
+         * Title
+         */
+        title: string;
+        /**
+         * Type
+         */
+        type?: string;
+    };
+};
+
+export type versionApiV1SystemVersionGetError = versionApiV1SystemVersionGetErrors[keyof versionApiV1SystemVersionGetErrors];
 
 export type versionApiV1SystemVersionGetResponses = {
     /**

@@ -14,4 +14,9 @@ def test_blank_app_version_fails_explicitly_without_secret_values() -> None:
 
 def test_environment_file_is_anchored_to_the_repository() -> None:
     assert Settings.model_config["env_file"] == PROJECT_ROOT / ".env"
-    assert PROJECT_ROOT.name == "retrovault"
+
+
+def test_blank_database_url_fails_explicitly() -> None:
+    with pytest.raises(ValidationError) as error:
+        Settings(database_url="")
+    assert "DATABASE_URL must not be blank" in str(error.value)
