@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-retrovault}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retrovault-local}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-retrovault}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes: [retrovault-db:/var/lib/postgresql]
+  backend:
+    build: {context: ., dockerfile: backend/Dockerfile}
+    environment:
+      APP_VERSION: ${APP_VERSION:-dev}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-retrovault-local}@db:5432/${POSTGRES_DB:-retrovault}
+    command: ["sh", "-c", "alembic upgrade head && exec fastapi run --host 0.0.0.0"]
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  frontend:
+    image: oven/bun:1
+    working_dir: /workspace/frontend
+    command: ["sh", "-c", "bun install --frozen-lockfile && bun run dev --host 0.0.0.0"]
+    volumes:
+      - ".:/workspace"
+      - "frontend-node-modules:/workspace/node_modules"
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_APP_VERSION: ${APP_VERSION:-dev}
+    ports: ["5173:5173"]
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:5173').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      backend: {condition: service_healthy}
+volumes:
+  retrovault-db:
+  frontend-node-modules:

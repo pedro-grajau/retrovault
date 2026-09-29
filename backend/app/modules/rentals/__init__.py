@@ -1,0 +1,1 @@
+"""rentals module boundary."""

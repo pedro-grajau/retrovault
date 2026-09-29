@@ -1,0 +1,27 @@
+name: CI
+on: [push, pull_request]
+env:
+  APP_VERSION: ${{ github.sha }}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: oven-sh/setup-bun@v2
+      - run: uv sync --project backend --frozen
+      - run: uv run --project backend ruff check backend/app backend/tests
+      - run: uv run --project backend ty check backend/app
+      - run: uv run --project backend pytest backend/tests/architecture backend/tests/api backend/tests/contract
+      - run: uv run alembic upgrade head --sql
+        working-directory: backend
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd frontend build
+      - run: scripts/check-contracts.sh
+      - run: uv run --project backend python scripts/security-check.py
+      - run: uv run --project backend python scripts/validate-compose.py
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run --cwd frontend test
+      - run: docker compose config --quiet
+      - run: docker compose build
+      - run: scripts/compose-smoke.sh

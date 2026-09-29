@@ -1,0 +1,37 @@
+import { expect, test } from "@playwright/test"
+
+test("sandbox shell is keyboard accessible and versioned", async ({ page }) => {
+  await page.route("**/api/v1/system/version", async (route) => {
+    await route.fulfill({
+      json: {
+        app_version: "api-verified-1.1",
+        correlation_id: "1f4bfe4d-6a71-4d78-97d2-d4c481cc7bd7",
+      },
+    })
+  })
+  await page.goto("/")
+  await expect(
+    page.getByText("Experiência demonstrativa. Nenhuma compra real."),
+  ).toBeVisible()
+  await page.keyboard.press("Tab")
+  await expect(
+    page.getByRole("link", { name: "Pular para o conteúdo" }),
+  ).toBeFocused()
+  await expect(
+    page.getByRole("heading", { name: /Clássicos preservados/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("api-verified-1.1", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("APP_VERSION api-verified-1.1")).toBeVisible()
+})
+
+test("shell does not overflow at 320 CSS px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 })
+  await page.goto("/")
+  const dimensions = await page.evaluate(() => ({
+    width: document.documentElement.scrollWidth,
+    viewport: document.documentElement.clientWidth,
+  }))
+  expect(dimensions.width).toBeLessThanOrEqual(dimensions.viewport)
+})
