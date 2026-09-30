@@ -64,6 +64,7 @@ class CatalogRecord:
 class SnapshotRecord:
     payload: bytes | None
     error_code: str | None = None
+    error_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)

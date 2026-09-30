@@ -95,6 +95,67 @@ def test_versioned_fixture_is_local_and_deterministic() -> None:
     assert len(snapshot.records) == 2
 
 
+def test_manifest_accepts_lowercase_rfc3339_separators_and_normalizes_utc(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "package"
+    _package(package, "local-test", "1")
+    manifest_path = package / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["captured_at"] = "2026-09-29t12:00:00z"
+    manifest_path.write_text(json.dumps(manifest))
+
+    snapshot = LocalPackage(package).snapshot()
+
+    assert snapshot.manifest.captured_at.isoformat() == "2026-09-29T12:00:00+00:00"
+
+
+def test_snapshot_stays_on_open_directory_when_root_path_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    _package(package, "local-test", "1", title="Conteúdo original")
+    outside = tmp_path / "outside"
+    _package(outside, "local-test", "1", title="Conteúdo externo")
+    moved_package = tmp_path / "package-original"
+    source = LocalPackage(package)
+    parse_manifest = source._manifest
+
+    def replace_root_after_manifest(raw: bytes):
+        manifest = parse_manifest(raw)
+        package.rename(moved_package)
+        package.symlink_to(outside, target_is_directory=True)
+        return manifest
+
+    monkeypatch.setattr(source, "_manifest", replace_root_after_manifest)
+    snapshot = source.snapshot()
+
+    assert snapshot.records[0].payload is not None
+    title = json.loads(snapshot.records[0].payload)["attributes"]["title"]
+    assert title == "Conteúdo original"
+
+
+def test_snapshot_rejects_parent_replaced_with_symlink_before_open(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    package = parent / "package"
+    _package(package, "local-test", "1")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _package(outside / "package", "local-test", "1", title="Conteúdo externo")
+    source = LocalPackage(package)
+
+    parent.rename(tmp_path / "original-parent")
+    parent.symlink_to(outside, target_is_directory=True)
+
+    from app.modules.data_governance.ports.source import PackageError
+
+    with pytest.raises(PackageError, match="package_unavailable"):
+        source.snapshot()
+
+
 def test_package_rejects_escaping_symlink_and_isolates_unreadable_record(tmp_path: Path) -> None:
     package = tmp_path / "package"
     _package(package, "local-test", "1")
@@ -105,10 +166,37 @@ def test_package_rejects_escaping_symlink_and_isolates_unreadable_record(tmp_pat
     snapshot = LocalPackage(package).snapshot()
     assert snapshot.records[0].payload is None
     assert snapshot.records[0].error_code == "record_unavailable"
-
     (package / "game.json").unlink()
     (package / "game.json").mkdir()
     snapshot = LocalPackage(package).snapshot()
+    assert snapshot.records[0].payload is None
+    assert snapshot.records[0].error_code == "record_unavailable"
+
+
+def test_fifo_reference_is_rejected_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    _package(package, "local-test", "1")
+    (package / "game.json").unlink()
+    os.mkfifo(package / "game.json")
+    real_open = os.open
+
+    def assert_nonblocking_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == "game.json":
+            assert flags & os.O_NONBLOCK
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", assert_nonblocking_open)
+
+    snapshot = LocalPackage(package).snapshot()
+
     assert snapshot.records[0].payload is None
     assert snapshot.records[0].error_code == "record_unavailable"
 
@@ -120,6 +208,32 @@ def test_record_size_limit_is_applied_to_bytes_read(tmp_path: Path) -> None:
     snapshot = LocalPackage(package, max_record_bytes=512).snapshot()
     assert snapshot.records[0].payload is None
     assert snapshot.records[0].error_code == "record_too_large"
+    assert snapshot.records[0].error_fingerprint == sha256(b"x" * 513).hexdigest()
+
+
+def test_negative_record_size_limit_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="max_record_bytes"):
+        LocalPackage(tmp_path, max_record_bytes=-1)
+
+
+def test_oversized_contents_change_package_fingerprint(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    _package(package, "same-source", "same-version")
+    source = LocalPackage(package, max_record_bytes=512)
+    common_prefix = b"x" * 513
+    first_content = common_prefix + b"a"
+    second_content = common_prefix + b"b"
+
+    (package / "game.json").write_bytes(first_content)
+    first = source.snapshot()
+    (package / "game.json").write_bytes(second_content)
+    second = source.snapshot()
+
+    assert first.records[0].error_fingerprint == sha256(first_content).hexdigest()
+    assert second.records[0].error_fingerprint == sha256(second_content).hexdigest()
+    assert first_content[:513] == second_content[:513]
+    assert first_content[513:] != second_content[513:]
+    assert first.package_hash != second.package_hash
 
 
 def test_manifest_rejects_extra_and_duplicate_keys(tmp_path: Path) -> None:
@@ -132,9 +246,60 @@ def test_manifest_rejects_extra_and_duplicate_keys(tmp_path: Path) -> None:
 
     with pytest.raises(PackageError):
         LocalPackage(package).snapshot()
-    manifest_path.write_text(original.replace('"actor": "Eduardo"', '"actor": "Eduardo", "actor": "outro"'))
+    manifest_path.write_text(
+        original.replace('"actor": "Eduardo"', '"actor": "Eduardo", "actor": "outro"')
+    )
     with pytest.raises(PackageError):
         LocalPackage(package).snapshot()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("actor", "Outra pessoa"),
+        ("captured_at", "2026-09-29 12:00:00Z"),
+        ("captured_at", "2026-02-30T12:00:00Z"),
+        ("file", 7),
+        ("file", "../outside.json"),
+    ],
+)
+def test_manifest_rejects_invalid_actor_and_file_before_opening_references(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    package = tmp_path / "package"
+    _package(package, "local-test", "1")
+    manifest_path = package / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    if field == "actor":
+        manifest["actor"] = value
+    elif field == "captured_at":
+        manifest["captured_at"] = value
+    else:
+        manifest["records"][0]["file"] = value
+    manifest_path.write_text(json.dumps(manifest))
+    source = LocalPackage(package)
+    opened: list[str] = []
+    read_file = source._read
+
+    def record_open(directory_fd: int, filename: str) -> bytes:
+        opened.append(filename)
+        return read_file(directory_fd, filename)
+
+    monkeypatch.setattr(source, "_read", record_open)
+    from app.modules.data_governance.ports.source import PackageError
+
+    with pytest.raises(PackageError):
+        source.snapshot()
+    assert opened == ["manifest.json"]
+
+    from app.modules.data_governance.api.cli import main
+
+    assert main(["ingest", str(package)]) == 2
+    assert json.loads(capsys.readouterr().out) == {"code": "invalid_package"}
 
 
 @pytest.mark.skipif(
@@ -217,6 +382,28 @@ def test_persistence_idempotency_lineage_rights_conflict_and_partial_failure(
                 text("DELETE FROM data_governance.attribute_origins WHERE evidence_id=:id"),
                 {"id": evidence["id"]},
             )
+    for mutation in (
+        "UPDATE data_governance.run_evidence SET evidence_id=evidence_id WHERE run_id=:id",
+        "DELETE FROM data_governance.run_evidence WHERE run_id=:id",
+        "UPDATE data_governance.ingest_failures SET code='changed' WHERE run_id=:id",
+        "DELETE FROM data_governance.ingest_failures WHERE run_id=:id",
+        "UPDATE data_governance.media_rights SET attribution='changed' WHERE evidence_id=:id",
+        "DELETE FROM data_governance.media_rights WHERE evidence_id=:id",
+    ):
+        target_id = evidence["id"] if "media_rights" in mutation else first["id"]
+        with pytest.raises(DBAPIError):
+            with engine.begin() as connection:
+                connection.execute(text(mutation), {"id": target_id})
+    for table in (
+        "data_governance.raw_evidence",
+        "data_governance.attribute_origins",
+        "data_governance.media_rights",
+        "data_governance.run_evidence",
+        "data_governance.ingest_failures",
+    ):
+        with pytest.raises(DBAPIError):
+            with engine.begin() as connection:
+                connection.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
     changed = json.loads((package / "game.json").read_text())
     changed["attributes"]["title"] = "Jogo novo"
     (package / "game.json").write_text(json.dumps(changed))
@@ -331,6 +518,32 @@ def test_evidence_uses_the_exact_bytes_in_package_fingerprint(tmp_path: Path) ->
     os.getenv("RUN_DB_TESTS") != "1",
     reason="PostgreSQL efêmero do compose não está ativo",
 )
+def test_changed_oversized_record_conflicts_for_same_source_version(
+    tmp_path: Path,
+) -> None:
+    source_name = f"large-{uuid4().hex}"
+    package = tmp_path / "package"
+    _package(package, source_name, "1")
+    common_prefix = b"x" * 513
+    (package / "game.json").write_bytes(common_prefix + b"a")
+    source = LocalPackage(package, max_record_bytes=512)
+    engine = create_engine(settings.database_url)
+    repository = PostgresRepository(engine)
+
+    first = ingest(source, repository, "test-version")
+    assert (first["received"], first["preserved"], first["rejected"]) == (1, 0, 1)
+    assert first["failures"][0]["code"] == "record_rejected"
+
+    (package / "game.json").write_bytes(common_prefix + b"b")
+    with pytest.raises(VersionConflict):
+        ingest(source, repository, "test-version")
+    engine.dispose()
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_DB_TESTS") != "1",
+    reason="PostgreSQL efêmero do compose não está ativo",
+)
 def test_simultaneous_replay_uses_one_run_and_one_evidence(tmp_path: Path) -> None:
     source_name = f"concurrent-{uuid4().hex}"
     package = tmp_path / "package"
@@ -368,3 +581,17 @@ def test_cli_reports_declared_errors(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert json.loads(capsys.readouterr().out) == {"code": "run_not_found"}
     assert main(["ingest", str(tmp_path / "missing")]) == 2
     assert json.loads(capsys.readouterr().out) == {"code": "invalid_package"}
+
+    package = tmp_path / "valid-package"
+    _package(package, f"cli-{uuid4().hex}", "1")
+    assert main(["ingest", str(package)]) == 0
+    output = capsys.readouterr().out
+    summary = json.loads(output)
+    assert summary["state"] == "completed"
+    assert (summary["received"], summary["preserved"], summary["rejected"]) == (
+        1,
+        1,
+        0,
+    )
+    assert "Jogo sintético" not in output
+    assert "raw_payload" not in summary

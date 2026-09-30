@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://retrovault.local/schemas/catalog-record.v1.json",
+  "title": "Registro de catálogo RetroVault v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+    "attributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {"type": "string"},
+        "platform": {"type": "string"},
+        "region": {"type": "string"},
+        "edition": {"type": "string"},
+        "genre": {"type": "string"},
+        "developer": {"type": "string"},
+        "year": {"type": "string"},
+        "rating": {"type": "string"},
+        "description": {"type": "string"},
+        "included_items": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "media": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "storage_right": {"enum": ["confirmed", "denied", "unknown"]},
+          "publication_right": {"enum": ["confirmed", "denied", "unknown"]},
+          "attribution": {"type": "string"}
+        }
+      }
+    }
+  }
+}

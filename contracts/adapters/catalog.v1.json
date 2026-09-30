@@ -1,1 +1,1 @@
-{"owner":"data_governance","version":1,"status":"active","adapters":[{"name":"local-package","kind":"filesystem","schema":"fixtures/catalog/manifest.schema.json","network":false,"media_copy":false,"limits":{"max_record_bytes":262144,"max_records":1000}}]}
+{"owner":"data_governance","version":1,"status":"active","adapters":[{"name":"local-package","kind":"filesystem","schema":"fixtures/catalog/manifest.schema.json","record_schema":"fixtures/catalog/record.schema.json","network":false,"media_copy":false,"limits":{"max_record_bytes":262144,"max_records":1000}}]}
