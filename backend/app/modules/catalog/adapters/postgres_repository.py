@@ -23,7 +23,8 @@ from app.modules.catalog.domain.publication import (
 
 _EDITORIAL_FIELDS = {
     "title", "platform", "region", "edition", "genre", "developer",
-    "publisher", "year", "rating", "description", "included_items",
+    "publisher", "year", "release_date", "release_date_granularity",
+    "rating", "description", "included_items",
 }
 _FORBIDDEN_FIELDS = {"price", "stock", "sku", "preco", "estoque", "condition", "availability"}
 
@@ -320,6 +321,10 @@ class PostgresCatalogRepository:
             connection.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": f"retrovault:catalog:idempotency:{idempotency_key}"},
+            )
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"retrovault:catalog:source-record:{source}:{source_record_id}"},
             )
             previous = connection.execute(
                 text("SELECT request_hash, response FROM catalog.command_idempotency WHERE idempotency_key=:key"),

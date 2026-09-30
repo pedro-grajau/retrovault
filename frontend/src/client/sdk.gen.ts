@@ -45,7 +45,11 @@ export class CatalogService {
      * Get Box Art
      */
     public static getBoxArtApiV1CatalogGamesGameIdBoxArtGet<ThrowOnError extends boolean = true>(options: Options<getBoxArtApiV1CatalogGamesGameIdBoxArtGetData, ThrowOnError>) {
-        return (options.client ?? client).get<getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses, getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors, ThrowOnError>({ url: '/api/v1/catalog/games/{game_id}/box-art', ...options });
+        return (options.client ?? client).get<getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses, getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors, ThrowOnError>({
+            responseType: 'blob',
+            url: '/api/v1/catalog/games/{game_id}/box-art',
+            ...options
+        });
     }
 }
 

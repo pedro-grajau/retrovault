@@ -115,6 +115,10 @@ async def test_cover_route_serves_only_published_media(monkeypatch) -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(f"/api/v1/catalog/games/{game.id}/box-art")
+        cached = await client.get(
+            f"/api/v1/catalog/games/{game.id}/box-art",
+            headers={"If-None-Match": f'W/"{game.cover_hash}"'},
+        )
         missing = await client.get(f"/api/v1/catalog/games/{uuid4()}/box-art")
 
     assert response.status_code == 200
@@ -122,6 +126,9 @@ async def test_cover_route_serves_only_published_media(monkeypatch) -> None:
     assert response.headers["Content-Type"] == "image/png"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Cache-Control"] == "public, max-age=60"
+    assert cached.status_code == 304
+    assert cached.content == b""
+    assert cached.headers["ETag"] == f'"{game.cover_hash}"'
     assert missing.status_code == 404
 
 
@@ -142,7 +149,51 @@ def test_catalog_openapi_documents_public_error_and_not_modified_responses() -> 
 
     detail = paths["/api/v1/catalog/games/{game_id}"]["get"]["responses"]
     box_art = paths["/api/v1/catalog/games/{game_id}/box-art"]["get"]["responses"]
+    schemas = schema["components"]["schemas"]
 
+    assert "ETag" in detail["200"]["headers"]
+    assert "ETag" in detail["304"]["headers"]
     assert "304" in detail
     assert "404" in detail
+    assert "304" in box_art
     assert "404" in box_art
+    assert "ETag" in box_art["200"]["headers"]
+    assert "ETag" in box_art["304"]["headers"]
+    assert set(box_art["200"]["content"]) == {
+        "image/png", "image/jpeg", "image/webp"
+    }
+    assert all(
+        media["schema"] == {"type": "string", "format": "binary"}
+        for media in box_art["200"]["content"].values()
+    )
+    attributes = schemas["GameAttributes"]
+    assert attributes["additionalProperties"] is False
+    assert attributes["properties"]["included_items"]["anyOf"]
+    origin = schemas["GameResponse"]["properties"]["origin_by_attribute"]
+    assert origin["additionalProperties"]["$ref"].endswith("/AttributeOrigin")
+
+
+@pytest.mark.anyio
+async def test_catalog_cors_allows_conditional_requests_and_exposes_etag(monkeypatch) -> None:
+    game = _game()
+    monkeypatch.setattr(catalog_router, "_catalog", FakePublishedCatalog(game))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        preflight = await client.options(
+            f"/api/v1/catalog/games/{game.id}",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "If-None-Match",
+            },
+        )
+        response = await client.get(
+            f"/api/v1/catalog/games/{game.id}",
+            headers={"Origin": "http://localhost:5173"},
+        )
+
+    assert preflight.status_code == 200
+    assert "if-none-match" in preflight.headers["access-control-allow-headers"].lower()
+    assert response.status_code == 200
+    assert response.headers["ETag"] == f'"{game.etag}"'
+    assert "etag" in response.headers["access-control-expose-headers"].lower()

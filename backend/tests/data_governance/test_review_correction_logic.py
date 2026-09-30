@@ -314,3 +314,34 @@ def test_correction_revalidation_resolves_required_field_but_keeps_other_issue(
     assert candidate["state"] == expected_state
     if other_issue:
         assert other_issue in candidate["issues"]
+
+
+
+
+def test_decompression_bomb_during_candidate_review_quarantines_cover(
+    monkeypatch,
+) -> None:
+    run_id, evidence_id = uuid4(), uuid4()
+    connection = RevalidatedCandidateConnection(run_id, evidence_id)
+    open_image = Image.open
+    calls = 0
+
+    def bomb_on_second_open(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise Image.DecompressionBombError("unsafe image")
+        return open_image(*args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", bomb_on_second_open)
+    candidate = PostgresRepository(engine=None)._review_candidate(
+        connection, run_id, "42", "editorial-v1"
+    )
+
+    assert calls == 2
+    assert candidate["state"] == "quarantine"
+    assert candidate["cover"] is None
+    assert any(
+        issue["field"] == "box_art" and issue["code"] == "cover_inaccessible"
+        for issue in candidate["issues"]
+    )

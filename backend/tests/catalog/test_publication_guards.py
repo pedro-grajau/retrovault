@@ -1,6 +1,7 @@
 import base64
 import json
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -197,3 +198,74 @@ def test_inactive_public_games_are_omitted_from_all_repository_reads() -> None:
     assert cover is None
     assert len(engine.queries) == 3
     assert all("g.active" in query.lower() for query, _ in engine.queries)
+
+
+class PageResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def mappings(self):
+        return self
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class PageConnection:
+    def __init__(self, engine):
+        self.engine = engine
+
+    def execute(self, statement, parameters=None):
+        params = dict(parameters or {})
+        self.engine.queries.append((" ".join(str(statement).split()), params))
+        if "last_id" not in params:
+            return PageResult(self.engine.first_page)
+        return PageResult(self.engine.second_page)
+
+
+class PageEngine:
+    def __init__(self, first_page, second_page):
+        self.first_page = first_page
+        self.second_page = second_page
+        self.queries = []
+
+    @contextmanager
+    def connect(self):
+        yield PageConnection(self)
+
+
+def _page_row(game_id):
+    return {
+        "id": game_id,
+        "title": f"Jogo {game_id}",
+        "platform": "SNES",
+        "editorial": {"attributes": {"title": f"Jogo {game_id}"}},
+        "source": "retroachievements",
+        "source_record_id": str(game_id),
+        "version": 1,
+        "etag": "a" * 64,
+        "verified_at": datetime(2026, 9, 30, tzinfo=UTC),
+        "cover_hash": "b" * 64,
+        "content_type": "image/png",
+        "attribution": "RetroAchievements",
+    }
+
+
+def test_catalog_pagination_continues_without_duplicates_across_two_pages() -> None:
+    ids = sorted([uuid4(), uuid4(), uuid4()])
+    engine = PageEngine(
+        [_page_row(game_id) for game_id in ids],
+        [_page_row(ids[2])],
+    )
+    repository = PostgresCatalogRepository(engine)
+
+    first_page, cursor = repository.list_games(limit=2)
+    second_page, next_cursor = repository.list_games(limit=2, cursor=cursor)
+    collected = [game.id for game in [*first_page, *second_page]]
+
+    assert [game.id for game in first_page] == ids[:2]
+    assert cursor == repository._cursor_encode(ids[1])
+    assert [game.id for game in second_page] == [ids[2]]
+    assert next_cursor is None
+    assert len(collected) == len(set(collected)) == 3
+    assert engine.queries[1][1]["last_id"] == ids[1]

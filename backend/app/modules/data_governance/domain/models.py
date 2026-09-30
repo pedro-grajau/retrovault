@@ -76,3 +76,4 @@ class PackageSnapshot:
     package_hash: str
     records: tuple[SnapshotRecord, ...]
     config_fingerprint: str = ""
+    manifest_hash: str | None = None

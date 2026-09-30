@@ -27,6 +27,8 @@ MAX_MANIFEST_BYTES = 128_000
 MAX_API_BYTES = 2_000_000
 MAX_MEDIA_BYTES = 5_000_000
 MAX_IDS = 1_000
+MAX_SNAPSHOT_BYTES = 64_000_000
+MAX_SNAPSHOT_DURATION_SECONDS = 900.0
 MAX_REDIRECTS = 3
 MAX_RETRIES = 2
 MAX_RETRY_WAIT_SECONDS = 30.0
@@ -47,14 +49,18 @@ class RetroAchievementsSource:
         *,
         client: httpx.Client | None = None,
         timeout: float = 10.0,
+        total_timeout: float = MAX_SNAPSHOT_DURATION_SECONDS,
     ) -> None:
         if not api_key or any(ord(character) < 32 for character in api_key):
             raise ValueError("retroachievements_key_unavailable")
         if timeout <= 0 or timeout > 30:
             raise ValueError("invalid_timeout")
+        if total_timeout <= 0 or total_timeout > MAX_SNAPSHOT_DURATION_SECONDS:
+            raise ValueError("invalid_total_timeout")
         self.manifest_path = manifest_path
         self.api_key = api_key
         self.timeout = timeout
+        self.total_timeout = total_timeout
         self._client = client
         self._owns_client = client is None
 
@@ -111,6 +117,11 @@ class RetroAchievementsSource:
         except (OSError, UnicodeError, TypeError, ValueError, KeyError) as exc:
             raise PackageError("invalid_manifest") from exc
 
+    def manifest_identity(self) -> tuple[Manifest, str]:
+        """Return a local manifest fingerprint without making provider requests."""
+        manifest, raw = self._load_manifest()
+        return manifest, hashlib.sha256(raw).hexdigest()
+
     @staticmethod
     def _safe_media_url(path: object) -> str:
         if not isinstance(path, str) or not path.startswith("/Images/"):
@@ -135,10 +146,19 @@ class RetroAchievementsSource:
             except (TypeError, ValueError, OverflowError):
                 return None
 
-    def _request(self, url: str, *, params: dict[str, str] | None = None, max_bytes: int) -> bytes:
+    def _request(
+        self,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+        max_bytes: int,
+        total_deadline: float | None = None,
+    ) -> bytes:
         current_url = url
         current_params = params
         deadline = time.monotonic() + self.timeout
+        if total_deadline is not None:
+            deadline = min(deadline, total_deadline)
         for redirect_count in range(MAX_REDIRECTS + 1):
             for attempt in range(MAX_RETRIES + 1):
                 remaining = deadline - time.monotonic()
@@ -207,15 +227,18 @@ class RetroAchievementsSource:
             continue
         raise PackageError("source_redirect_rejected")
 
-    def _game(self, game_id: int) -> tuple[bytes, bytes, bytes | None, str | None]:
+    def _game(
+        self, game_id: int, total_deadline: float
+    ) -> tuple[bytes, bytes, bytes | None, str | None]:
         raw = self._request(
             API_URL,
             params={"i": str(game_id), "y": self.api_key},
             max_bytes=MAX_API_BYTES,
+            total_deadline=total_deadline,
         )
         try:
             payload = strict_json_loads(raw)
-        except (UnicodeError, ValueError) as exc:
+        except (UnicodeError, ValueError, RecursionError) as exc:
             raise PackageError("source_response_invalid") from exc
         if (
             not isinstance(payload, dict)
@@ -230,7 +253,11 @@ class RetroAchievementsSource:
         if payload.get("ImageBoxArt"):
             try:
                 image_url = self._safe_media_url(payload["ImageBoxArt"])
-                image_bytes = self._request(image_url, max_bytes=MAX_MEDIA_BYTES)
+                image_bytes = self._request(
+                    image_url,
+                    max_bytes=MAX_MEDIA_BYTES,
+                    total_deadline=total_deadline,
+                )
             except PackageError:
                 # A resposta original continua preservada; uma capa indisponível
                 # vira uma pendência de quarentena na etapa de processamento.
@@ -248,8 +275,13 @@ class RetroAchievementsSource:
             if isinstance(value, str) and value.strip():
                 attrs[attribute] = value
         released = payload.get("Released")
-        if isinstance(released, str) and (match := re.match(r"^(\d{4})", released)):
-            attrs["year"] = match.group(1)
+        if isinstance(released, str) and released:
+            attrs["release_date"] = released
+            granularity = payload.get("ReleasedAtGranularity")
+            if isinstance(granularity, str) and granularity in {"year", "month", "day"}:
+                attrs["release_date_granularity"] = granularity
+            if match := re.match(r"^(\d{4})", released):
+                attrs["year"] = match.group(1)
         mapped = {
             "id": str(game_id),
             "attributes": attrs,
@@ -261,34 +293,78 @@ class RetroAchievementsSource:
                 "attribution": "RetroAchievements — autorização de portfólio informada em 2026-09-30",
             }] if image_url and image_bytes is not None else []),
         }
-        return json.dumps(mapped, ensure_ascii=False, separators=(",", ":")).encode(), raw, image_bytes, str(payload.get("ImageBoxArt")) if image_url else None
+        try:
+            mapped_bytes = json.dumps(
+                mapped, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        except UnicodeError as exc:
+            raise PackageError("source_response_invalid") from exc
+        return (
+            mapped_bytes,
+            raw,
+            image_bytes,
+            str(payload.get("ImageBoxArt")) if image_url else None,
+        )
 
     def snapshot(self) -> PackageSnapshot:
+        total_deadline = time.monotonic() + self.total_timeout
         manifest, manifest_bytes = self._load_manifest()
         digest = hashlib.sha256()
         digest.update(len(manifest_bytes).to_bytes(8, "big"))
         digest.update(manifest_bytes)
         records: list[SnapshotRecord] = []
+        retained_bytes = len(manifest_bytes)
         try:
             for reference in manifest.records:
                 game_id = int(reference.record_id)
+                if time.monotonic() >= total_deadline:
+                    code = "snapshot_deadline_exceeded"
+                    digest.update(reference.record_id.encode())
+                    digest.update(code.encode())
+                    records.append(SnapshotRecord(None, code))
+                    continue
                 try:
-                    mapped, source_payload, image_bytes, image_path = self._game(game_id)
+                    mapped, source_payload, image_bytes, image_path = self._game(
+                        game_id, total_deadline
+                    )
+                    media = ((image_path, image_bytes),) if image_path and image_bytes is not None else ()
+                    record_size = len(mapped) + len(source_payload) + sum(
+                        len(content) for _, content in media if content is not None
+                    )
+                    if retained_bytes + record_size > MAX_SNAPSHOT_BYTES:
+                        code = "snapshot_size_limit"
+                        digest.update(reference.record_id.encode())
+                        digest.update(code.encode())
+                        records.append(SnapshotRecord(None, code))
+                        continue
+                    retained_bytes += record_size
                     digest.update(reference.record_id.encode())
                     digest.update(hashlib.sha256(source_payload).digest())
                     if image_bytes is not None:
                         digest.update(hashlib.sha256(image_bytes).digest())
-                    media = ((image_path, image_bytes),) if image_path and image_bytes is not None else ()
-                    records.append(SnapshotRecord(mapped, media_bytes=media, source_payload=source_payload))
+                    records.append(
+                        SnapshotRecord(
+                            mapped,
+                            media_bytes=media,
+                            source_payload=source_payload,
+                        )
+                    )
                 except PackageError as exc:
                     digest.update(reference.record_id.encode())
                     digest.update(str(exc.args[0]).encode())
                     records.append(SnapshotRecord(None, str(exc.args[0])))
             fingerprint = hashlib.sha256(
-                b"retroachievements-get-game-v1;max-api=2000000;max-image=5000000"
+                b"retroachievements-get-game-v1;max-api=2000000;max-image=5000000;"
+                b"max-snapshot=64000000;total-timeout=900"
             ).hexdigest()
             digest.update(fingerprint.encode())
-            return PackageSnapshot(manifest, digest.hexdigest(), tuple(records), fingerprint)
+            return PackageSnapshot(
+                manifest,
+                digest.hexdigest(),
+                tuple(records),
+                fingerprint,
+                hashlib.sha256(manifest_bytes).hexdigest(),
+            )
         finally:
             if self._owns_client and self._client is not None:
                 self._client.close()

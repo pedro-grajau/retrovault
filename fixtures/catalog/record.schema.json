@@ -18,6 +18,8 @@
         "genre": {"type": "string"},
         "developer": {"type": "string"},
         "year": {"type": "string"},
+        "release_date": {"type": "string"},
+        "release_date_granularity": {"type": "string", "enum": ["year", "month", "day"]},
         "rating": {"type": "string"},
         "description": {"type": "string"},
         "included_items": {"type": "array", "items": {"type": "string"}}

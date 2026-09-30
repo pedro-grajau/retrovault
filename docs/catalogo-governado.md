@@ -16,7 +16,9 @@ Configure `DATABASE_URL` e `RETROACHIEVEMENTS_API_KEY` na configuração privada
 }
 ```
 
-Cada ID é consultado individualmente pelo endpoint oficial Get Game. O adapter mapeia os consoles autorizados: PlayStation, SNES, Mega Drive e Nintendo 64. Uma capa ausente, inacessível, inválida ou com direitos/atribuição não confirmados mantém o candidato em quarentena. Falhas de um ID não interrompem a aquisição dos demais.
+Cada ID é consultado individualmente pelo endpoint oficial Get Game. O adapter mapeia os consoles autorizados: PlayStation, SNES, Mega Drive e Nintendo 64. Preserva a data `Released` e a precisão `ReleasedAtGranularity` (`year`, `month` ou `day`), além do ano derivado para exibição. Uma capa ausente, inacessível, inválida ou com direitos/atribuição não confirmados mantém o candidato em quarentena. Falhas de um ID não interrompem a aquisição dos demais.
+
+O manifesto aceita até 1.000 IDs. Cada aquisição tem limite total de 15 minutos e retém no máximo 64 MB de payloads mapeados, respostas originais e mídia; IDs que excederem esses limites ficam registrados como falha para aquela execução. Repetir um manifesto já concluído, com os mesmos bytes, devolve o resumo persistido sem consultar novamente a API. Reutilizar a versão com conteúdo diferente continua sendo conflito.
 
 ## Comandos privados
 
