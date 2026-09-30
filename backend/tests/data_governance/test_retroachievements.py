@@ -261,3 +261,152 @@ def test_request_enforces_overall_deadline_for_trickling_body(tmp_path: Path) ->
     assert snapshot.records[0].source_payload is not None
     assert json.loads(snapshot.records[0].payload or b"{}")["media"] == []
     assert snapshot.records[1].source_payload is not None
+
+
+def test_snapshot_limits_total_retained_payload_and_media(tmp_path: Path, monkeypatch) -> None:
+    import app.modules.data_governance.adapters.retroachievements as adapter
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "source": "retroachievements",
+        "version": "portfolio-v1",
+        "captured_at": "2026-09-30T12:00:00Z",
+        "actor": "Eduardo",
+        "record_ids": [80, 81, 82],
+    }))
+    monkeypatch.setattr(adapter, "MAX_SNAPSHOT_BYTES", 150)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        game_id = int(request.url.params["i"])
+        return httpx.Response(
+            200,
+            json={"ID": game_id, "Title": f"Jogo {game_id}", "ConsoleID": 3},
+        )
+
+    snapshot = RetroAchievementsSource(
+        manifest_path,
+        "fixture-secret",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    ).snapshot()
+
+    retained = sum(
+        len(record.payload or b"")
+        + len(record.source_payload or b"")
+        + sum(len(content or b"") for _, content in record.media_bytes)
+        for record in snapshot.records
+    )
+    assert retained <= adapter.MAX_SNAPSHOT_BYTES
+    assert any(record.error_code == "snapshot_size_limit" for record in snapshot.records)
+
+
+def test_snapshot_deadline_covers_the_entire_manifest(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "source": "retroachievements",
+        "version": "portfolio-v1",
+        "captured_at": "2026-09-30T12:00:00Z",
+        "actor": "Eduardo",
+        "record_ids": [90, 91, 92],
+    }))
+    requested: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        game_id = int(request.url.params["i"])
+        requested.append(game_id)
+        time.sleep(0.04)
+        return httpx.Response(
+            200,
+            json={"ID": game_id, "Title": f"Jogo {game_id}", "ConsoleID": 3},
+        )
+
+    snapshot = RetroAchievementsSource(
+        manifest_path,
+        "fixture-secret",
+        total_timeout=0.06,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    ).snapshot()
+
+    assert len(requested) < 3
+    assert any(
+        record.error_code == "snapshot_deadline_exceeded"
+        for record in snapshot.records
+    )
+
+
+def test_malformed_json_and_surrogate_only_fail_their_records(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import app.modules.data_governance.adapters.retroachievements as adapter
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "source": "retroachievements",
+        "version": "portfolio-v1",
+        "captured_at": "2026-09-30T12:00:00Z",
+        "actor": "Eduardo",
+        "record_ids": [100, 101, 102],
+    }))
+    parse_json = adapter.strict_json_loads
+
+    def raise_recursion_for_first_record(raw):
+        if b'"ID":100' in raw:
+            raise RecursionError("deeply nested response")
+        return parse_json(raw)
+
+    monkeypatch.setattr(adapter, "strict_json_loads", raise_recursion_for_first_record)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        game_id = int(request.url.params["i"])
+        if game_id == 100:
+            return httpx.Response(200, json={"ID": 100, "Title": "Malformado"})
+        if game_id == 101:
+            return httpx.Response(
+                200, content=b'{"ID":101,"Title":"\\ud800","ConsoleID":3}'
+            )
+        return httpx.Response(
+            200, json={"ID": 102, "Title": "Válido", "ConsoleID": 3}
+        )
+
+    snapshot = RetroAchievementsSource(
+        manifest_path,
+        "fixture-secret",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    ).snapshot()
+
+    assert [record.error_code for record in snapshot.records[:2]] == [
+        "source_response_invalid",
+        "source_response_invalid",
+    ]
+    assert snapshot.records[2].source_payload is not None
+    assert json.loads(snapshot.records[2].payload or b"{}")["attributes"]["title"] == "Válido"
+
+
+def test_release_date_preserves_api_granularity(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "source": "retroachievements",
+        "version": "portfolio-v1",
+        "captured_at": "2026-09-30T12:00:00Z",
+        "actor": "Eduardo",
+        "record_ids": [110],
+    }))
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "ID": 110,
+            "Title": "Jogo",
+            "ConsoleID": 3,
+            "Released": "1992-06-02 00:00:00",
+            "ReleasedAtGranularity": "day",
+        })
+
+    snapshot = RetroAchievementsSource(
+        manifest_path,
+        "fixture-secret",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    ).snapshot()
+    attributes = json.loads(snapshot.records[0].payload or b"{}")["attributes"]
+
+    assert attributes["year"] == "1992"
+    assert attributes["release_date"] == "1992-06-02 00:00:00"
+    assert attributes["release_date_granularity"] == "day"

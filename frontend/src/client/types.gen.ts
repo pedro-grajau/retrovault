@@ -5,6 +5,86 @@ export type ClientOptions = {
 };
 
 /**
+ * AttributeOrigin
+ */
+export type AttributeOrigin = {
+    /**
+     * Captured At
+     */
+    captured_at?: string | null;
+    /**
+     * Source
+     */
+    source: string;
+    /**
+     * Source Record Id
+     */
+    source_record_id: string;
+    /**
+     * Source Version
+     */
+    source_version: string;
+};
+
+/**
+ * GameAttributes
+ */
+export type GameAttributes = {
+    /**
+     * Description
+     */
+    description?: string | null;
+    /**
+     * Developer
+     */
+    developer?: string | null;
+    /**
+     * Edition
+     */
+    edition?: string | null;
+    /**
+     * Genre
+     */
+    genre?: string | null;
+    /**
+     * Included Items
+     */
+    included_items?: Array<string> | null;
+    /**
+     * Platform
+     */
+    platform?: string | null;
+    /**
+     * Publisher
+     */
+    publisher?: string | null;
+    /**
+     * Rating
+     */
+    rating?: string | null;
+    /**
+     * Region
+     */
+    region?: string | null;
+    /**
+     * Release Date
+     */
+    release_date?: string | null;
+    /**
+     * Release Date Granularity
+     */
+    release_date_granularity?: 'year' | 'month' | 'day' | null;
+    /**
+     * Title
+     */
+    title?: string | null;
+    /**
+     * Year
+     */
+    year?: string | null;
+};
+
+/**
  * GameListResponse
  */
 export type GameListResponse = {
@@ -22,12 +102,7 @@ export type GameListResponse = {
  * GameResponse
  */
 export type GameResponse = {
-    /**
-     * Attributes
-     */
-    attributes: {
-        [key: string]: unknown;
-    };
+    attributes: GameAttributes;
     /**
      * Cover Attribution
      */
@@ -44,7 +119,7 @@ export type GameResponse = {
      * Origin By Attribute
      */
     origin_by_attribute: {
-        [key: string]: unknown;
+        [key: string]: AttributeOrigin;
     };
     /**
      * Platform
@@ -198,12 +273,22 @@ export type getGameApiV1CatalogGamesGameIdGetResponses = {
      * Successful Response
      */
     200: GameResponse;
+    /**
+     * The published game has not changed.
+     */
+    304: undefined;
 };
 
 export type getGameApiV1CatalogGamesGameIdGetResponse = getGameApiV1CatalogGamesGameIdGetResponses[keyof getGameApiV1CatalogGamesGameIdGetResponses];
 
 export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetData = {
     body?: never;
+    headers?: {
+        /**
+         * If-None-Match
+         */
+        'If-None-Match'?: string | null;
+    };
     path: {
         /**
          * Game Id
@@ -229,10 +314,16 @@ export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetError = getBoxArtApiV1Catal
 
 export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses = {
     /**
-     * Successful Response
+     * Authorized published cover image.
      */
-    200: unknown;
+    200: Blob | File;
+    /**
+     * The published cover has not changed.
+     */
+    304: undefined;
 };
+
+export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponse = getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses[keyof getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses];
 
 export type healthApiV1HealthGetData = {
     body?: never;

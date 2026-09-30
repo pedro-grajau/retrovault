@@ -12,6 +12,8 @@ class IngestionRepository(Protocol):
 
     def existing_run(self, source: str, version: str) -> dict[str, object] | None: ...
 
+    def set_manifest_hash(self, run_id: UUID, manifest_hash: str) -> None: ...
+
     def outcomes(self, run_id: UUID) -> dict[str, str]: ...
 
     def create_run(
@@ -21,6 +23,7 @@ class IngestionRepository(Protocol):
         package_hash: str,
         config_hash: str,
         app_version: str,
+        manifest_hash: str | None = None,
     ) -> None: ...
 
     def preserve(

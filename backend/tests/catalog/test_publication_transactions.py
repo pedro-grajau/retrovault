@@ -38,6 +38,7 @@ class Connection:
         sql = str(statement)
         params = dict(parameters or {})
         normalized = " ".join(sql.split()).lower()
+        self.engine.statements.append((normalized, params))
         if "select request_hash, response from catalog.command_idempotency" in normalized:
             return Result(row=self.engine.idempotency)
         if "select 1 from data_governance.staging_records" in normalized:
@@ -70,6 +71,7 @@ class Engine:
         self.game = game
         self.published_record = published_record
         self.commits: list[list[tuple[str, dict[str, object]]]] = []
+        self.statements: list[tuple[str, dict[str, object]]] = []
         self.rollbacks = 0
 
     @contextmanager
@@ -144,6 +146,63 @@ def test_publication_writes_projection_audit_outbox_and_idempotency_together() -
     assert any("insert into catalog.command_idempotency" in statement for statement in sql)
     assert len(engine.commits) == 2  # Read-only idempotency check, then one write transaction.
     assert engine.commits[0] == []
+    identity_lock_index = next(
+        index for index, (_, parameters) in enumerate(engine.statements)
+        if str(parameters.get("key", "")).startswith(
+            "retrovault:catalog:source-record:retroachievements:42"
+        )
+    )
+    projection_lookup_index = next(
+        index for index, (statement, _) in enumerate(engine.statements)
+        if "select id, version, etag, active from catalog.published_games" in statement
+    )
+    assert identity_lock_index < projection_lookup_index
+
+
+def test_successful_republication_updates_stable_game_and_records_update_action() -> None:
+    game_id = uuid4()
+    engine = Engine(
+        published_record={
+            "id": game_id,
+            "version": 3,
+            "etag": "current-etag",
+            "active": True,
+        }
+    )
+    candidate = _candidate()
+    candidate["public_id"] = game_id
+
+    response = _publish(
+        PostgresCatalogRepository(engine),
+        candidate,
+        key="republish-1",
+        published_etag='"current-etag"',
+    )
+
+    writes = engine.commits[-1]
+    update = next(
+        parameters for statement, parameters in writes
+        if "update catalog.published_games" in statement.lower()
+    )
+    version = next(
+        parameters for statement, parameters in writes
+        if "insert into catalog.published_game_versions" in statement.lower()
+    )
+    audit = next(
+        parameters for statement, parameters in writes
+        if "insert into catalog.publication_audit" in statement.lower()
+    )
+    outbox = next(
+        parameters for statement, parameters in writes
+        if "insert into platform.outbox_events" in statement.lower()
+    )
+
+    assert response["game_id"] == str(game_id)
+    assert response["version"] == 4
+    assert update["id"] == game_id
+    assert update["version"] == 4
+    assert version["action"] == audit["action"] == "update"
+    assert json.loads(outbox["payload"])["action"] == "update"
 
 
 def test_publication_serializes_lineage_datetimes_as_iso_strings() -> None:

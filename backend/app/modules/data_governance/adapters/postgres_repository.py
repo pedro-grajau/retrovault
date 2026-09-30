@@ -33,7 +33,8 @@ class InvalidCorrection(ValueError):
 
 EDITABLE_FIELDS = {
     "title", "platform", "region", "edition", "genre", "developer",
-    "publisher", "year", "rating", "description", "included_items",
+    "publisher", "year", "release_date", "release_date_granularity",
+    "rating", "description", "included_items",
 }
 MAX_INCLUDED_ITEMS = 100
 MAX_CORRECTION_TEXT = 5000
@@ -59,7 +60,7 @@ class PostgresRepository:
             row = (
                 connection.execute(
                     text(
-                        "SELECT id, package_hash, state FROM data_governance.ingest_runs WHERE source=:source AND source_version=:version"
+                        "SELECT id, package_hash, state, manifest_hash FROM data_governance.ingest_runs WHERE source=:source AND source_version=:version"
                     ),
                     {"source": source, "version": version},
                 )
@@ -67,6 +68,17 @@ class PostgresRepository:
                 .first()
             )
             return dict(row) if row else None
+
+    def set_manifest_hash(self, run_id: UUID, manifest_hash: str) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE data_governance.ingest_runs
+                    SET manifest_hash=:manifest_hash
+                    WHERE id=:id AND manifest_hash IS NULL
+                """),
+                {"id": run_id, "manifest_hash": manifest_hash},
+            )
 
     def outcomes(self, run_id: UUID) -> dict[str, str]:
         with self.engine.connect() as connection:
@@ -95,13 +107,14 @@ class PostgresRepository:
         package_hash: str,
         config_hash: str,
         app_version: str,
+        manifest_hash: str | None = None,
     ) -> None:
         with self.engine.begin() as connection:
             connection.execute(
                 text("""
                 INSERT INTO data_governance.ingest_runs
-                (id, source, source_version, captured_at, started_at, state, package_hash, config_fingerprint, app_version, received)
-                VALUES (:id, :source, :version, :captured_at, :started_at, 'running', :package_hash, :config_hash, :app_version, :received)
+                (id, source, source_version, captured_at, started_at, state, package_hash, config_fingerprint, app_version, received, manifest_hash)
+                VALUES (:id, :source, :version, :captured_at, :started_at, 'running', :package_hash, :config_hash, :app_version, :received, :manifest_hash)
             """),
                 {
                     "id": run_id,
@@ -113,6 +126,7 @@ class PostgresRepository:
                     "config_hash": config_hash,
                     "app_version": app_version,
                     "received": len(manifest.records),
+                    "manifest_hash": manifest_hash,
                 },
             )
 
@@ -142,7 +156,11 @@ class PostgresRepository:
                     "record_id": record.record_id,
                     "hash": payload_hash,
                     "payload": record.raw_payload,
-                    "payload_bytes": source_payload or record.raw_payload.encode("utf-8"),
+                    "payload_bytes": (
+                        record.raw_payload.encode("utf-8")
+                        if source_payload is None
+                        else source_payload
+                    ),
                     "captured_at": manifest.captured_at,
                     "preserved_at": datetime.now(UTC),
                 },
@@ -794,7 +812,12 @@ class PostgresRepository:
                 try:
                     with Image.open(BytesIO(content)) as image:
                         image_format = image.format
-                except (OSError, ValueError):
+                except (Image.DecompressionBombError, OSError, ValueError):
+                    issues.append({
+                        "field": "box_art",
+                        "code": "cover_inaccessible",
+                        "cause": "Capa privada inacessível ou inválida.",
+                    })
                     continue
                 mime_types = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
                 if image_format in mime_types:
@@ -828,7 +851,10 @@ class PostgresRepository:
             "state": "quarantine" if issues else "review",
             "issues": issues,
             "optional_missing": tuple(
-                field for field in ("publisher", "developer", "genre", "description", "year", "rating", "included_items")
+                field for field in (
+                    "publisher", "developer", "genre", "description", "year",
+                    "rating", "included_items",
+                )
                 if not values.get(field)
             ),
             "ambiguous_identity": candidate.ambiguous,
@@ -910,6 +936,10 @@ class PostgresRepository:
                 )
             )
             or (field != "included_items" and not isinstance(value, str))
+            or (
+                field == "release_date_granularity"
+                and value not in {"year", "month", "day"}
+            )
             or (isinstance(value, str) and len(value) > MAX_CORRECTION_TEXT)
         ):
             raise InvalidCorrection("invalid_correction")

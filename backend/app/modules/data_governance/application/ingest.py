@@ -34,6 +34,8 @@ ALLOWED_ATTRIBUTES = {
     "rating",
     "description",
     "included_items",
+    "release_date",
+    "release_date_granularity",
 }
 FORBIDDEN_FIELDS = {"price", "stock", "sku", "preco", "estoque"}
 
@@ -54,6 +56,11 @@ def parse_record(record_id: str, raw: str) -> CatalogRecord:
                 or not all(isinstance(item, str) for item in value)
             )
             if key == "included_items"
+            else (
+                not isinstance(value, str)
+                or value not in {"year", "month", "day"}
+            )
+            if key == "release_date_granularity"
             else not isinstance(value, str)
             for key, value in attributes.items()
         ):
@@ -97,6 +104,19 @@ def parse_record(record_id: str, raw: str) -> CatalogRecord:
 def ingest(
     source: LocalCatalogSource, repository: IngestionRepository, app_version: str
 ) -> dict[str, object]:
+    manifest_identity = getattr(source, "manifest_identity", None)
+    if callable(manifest_identity):
+        manifest, manifest_hash = manifest_identity()
+        with repository.guard(manifest.source, manifest.version):
+            existing = repository.existing_run(manifest.source, manifest.version)
+            if (
+                existing
+                and existing["state"] == "completed"
+                and existing.get("manifest_hash") == manifest_hash
+            ):
+                result = repository.summary(UUID(str(existing["id"])))
+                assert result is not None
+                return result
     snapshot = source.snapshot()
     with repository.guard(snapshot.manifest.source, snapshot.manifest.version):
         return _ingest_snapshot(source, repository, app_version, snapshot)
@@ -116,6 +136,8 @@ def _ingest_snapshot(
             raise VersionConflict("source_version_conflict")
         run_id = UUID(str(existing["id"]))
         if existing["state"] == "completed":
+            if existing.get("manifest_hash") is None and snapshot.manifest_hash:
+                repository.set_manifest_hash(run_id, snapshot.manifest_hash)
             result = repository.summary(run_id)
             assert result is not None
             return result
@@ -126,7 +148,14 @@ def _ingest_snapshot(
         config_hash = snapshot.config_fingerprint or hashlib.sha256(
             f"local-package-v1;max-record-bytes={source.max_record_bytes}".encode()
         ).hexdigest()
-        repository.create_run(run_id, manifest, package_hash, config_hash, app_version)
+        repository.create_run(
+            run_id,
+            manifest,
+            package_hash,
+            config_hash,
+            app_version,
+            snapshot.manifest_hash,
+        )
     outcomes = repository.outcomes(run_id)
     preserved = sum(outcome == "preserved" for outcome in outcomes.values())
     rejected = sum(outcome == "rejected" for outcome in outcomes.values())
@@ -139,7 +168,11 @@ def _ingest_snapshot(
             if snapshot_record.payload is None:
                 raise PackageError(snapshot_record.error_code or "record_unavailable")
             payload = snapshot_record.payload
-            source_payload = snapshot_record.source_payload or payload
+            source_payload = (
+                payload
+                if snapshot_record.source_payload is None
+                else snapshot_record.source_payload
+            )
             try:
                 raw = payload.decode("utf-8")
             except UnicodeError as exc:
