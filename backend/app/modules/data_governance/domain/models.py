@@ -4,9 +4,10 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 
-def strict_json_loads(raw: str | bytes) -> object:
+def strict_json_loads(raw: str | bytes) -> Any:
     def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
         for key, value in pairs:
