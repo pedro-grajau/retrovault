@@ -5,6 +5,112 @@ export type ClientOptions = {
 };
 
 /**
+ * GameListResponse
+ */
+export type GameListResponse = {
+    /**
+     * Items
+     */
+    items: Array<GameResponse>;
+    /**
+     * Next Cursor
+     */
+    next_cursor: string | null;
+};
+
+/**
+ * GameResponse
+ */
+export type GameResponse = {
+    /**
+     * Attributes
+     */
+    attributes: {
+        [key: string]: unknown;
+    };
+    /**
+     * Cover Attribution
+     */
+    cover_attribution: string;
+    /**
+     * Cover Url
+     */
+    cover_url: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Origin By Attribute
+     */
+    origin_by_attribute: {
+        [key: string]: unknown;
+    };
+    /**
+     * Platform
+     */
+    platform: string;
+    /**
+     * Source
+     */
+    source: string;
+    /**
+     * Source Record Id
+     */
+    source_record_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Verified At
+     */
+    verified_at: string;
+    /**
+     * Version
+     */
+    version: number;
+};
+
+/**
+ * HTTPValidationError
+ */
+export type HTTPValidationError = {
+    /**
+     * Detail
+     */
+    detail?: Array<ValidationError>;
+};
+
+/**
+ * ValidationError
+ */
+export type ValidationError = {
+    /**
+     * Context
+     */
+    ctx?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Input
+     */
+    input?: unknown;
+    /**
+     * Location
+     */
+    loc: Array<string | number>;
+    /**
+     * Message
+     */
+    msg: string;
+    /**
+     * Error Type
+     */
+    type: string;
+};
+
+/**
  * VersionResponse
  */
 export type VersionResponse = {
@@ -16,6 +122,116 @@ export type VersionResponse = {
      * Correlation Id
      */
     correlation_id: string;
+};
+
+export type listGamesApiV1CatalogGamesGetData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Platform
+         */
+        platform?: string | null;
+    };
+    url: '/api/v1/catalog/games';
+};
+
+export type listGamesApiV1CatalogGamesGetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type listGamesApiV1CatalogGamesGetError = listGamesApiV1CatalogGamesGetErrors[keyof listGamesApiV1CatalogGamesGetErrors];
+
+export type listGamesApiV1CatalogGamesGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: GameListResponse;
+};
+
+export type listGamesApiV1CatalogGamesGetResponse = listGamesApiV1CatalogGamesGetResponses[keyof listGamesApiV1CatalogGamesGetResponses];
+
+export type getGameApiV1CatalogGamesGameIdGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * If-None-Match
+         */
+        'If-None-Match'?: string | null;
+    };
+    path: {
+        /**
+         * Game Id
+         */
+        game_id: string;
+    };
+    query?: never;
+    url: '/api/v1/catalog/games/{game_id}';
+};
+
+export type getGameApiV1CatalogGamesGameIdGetErrors = {
+    /**
+     * Published game not found.
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type getGameApiV1CatalogGamesGameIdGetError = getGameApiV1CatalogGamesGameIdGetErrors[keyof getGameApiV1CatalogGamesGameIdGetErrors];
+
+export type getGameApiV1CatalogGamesGameIdGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: GameResponse;
+};
+
+export type getGameApiV1CatalogGamesGameIdGetResponse = getGameApiV1CatalogGamesGameIdGetResponses[keyof getGameApiV1CatalogGamesGameIdGetResponses];
+
+export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetData = {
+    body?: never;
+    path: {
+        /**
+         * Game Id
+         */
+        game_id: string;
+    };
+    query?: never;
+    url: '/api/v1/catalog/games/{game_id}/box-art';
+};
+
+export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors = {
+    /**
+     * Published box art not found.
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetError = getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors[keyof getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors];
+
+export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
 };
 
 export type healthApiV1HealthGetData = {

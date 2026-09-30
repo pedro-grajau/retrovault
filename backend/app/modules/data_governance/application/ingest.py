@@ -123,7 +123,7 @@ def _ingest_snapshot(
         run_id = uuid5(
             NAMESPACE_URL, f"retrovault:ingest:{manifest.source}:{manifest.version}"
         )
-        config_hash = hashlib.sha256(
+        config_hash = snapshot.config_fingerprint or hashlib.sha256(
             f"local-package-v1;max-record-bytes={source.max_record_bytes}".encode()
         ).hexdigest()
         repository.create_run(run_id, manifest, package_hash, config_hash, app_version)
@@ -139,12 +139,13 @@ def _ingest_snapshot(
             if snapshot_record.payload is None:
                 raise PackageError(snapshot_record.error_code or "record_unavailable")
             payload = snapshot_record.payload
+            source_payload = snapshot_record.source_payload or payload
             try:
                 raw = payload.decode("utf-8")
             except UnicodeError as exc:
                 raise InvalidRecord("invalid_encoding") from exc
             record = parse_record(reference.record_id, raw)
-            payload_hash = hashlib.sha256(payload).hexdigest()
+            payload_hash = hashlib.sha256(source_payload).hexdigest()
             evidence_id = uuid5(
                 NAMESPACE_URL,
                 f"retrovault:evidence:{manifest.source}:{reference.record_id}:{payload_hash}",
@@ -156,9 +157,10 @@ def _ingest_snapshot(
                 record,
                 payload_hash,
                 dict(snapshot_record.media_bytes),
+                source_payload=source_payload,
             )
             preserved += 1
-        except PackageError, InvalidRecord:
+        except (PackageError, InvalidRecord):
             repository.fail(run_id, reference.record_id, "record_rejected", uuid4())
             rejected += 1
         except Exception:

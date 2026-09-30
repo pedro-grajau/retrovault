@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
+from app.modules.catalog.api.router import router as catalog_router
 from app.platform.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,8 @@ class Problem(BaseModel):
 
 
 app = FastAPI(title="RetroVault API", version="1.0.0", openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["GET"], allow_headers=["X-Correlation-ID"], expose_headers=["X-Correlation-ID"])
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["GET"], allow_headers=["X-Correlation-ID", "If-None-Match"], expose_headers=["X-Correlation-ID", "ETag"])
+app.include_router(catalog_router)
 
 CORRELATION_ID_PARAMETER = {
     "name": "X-Correlation-ID",

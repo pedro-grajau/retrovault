@@ -1,0 +1,20 @@
+{
+  "owner": "catalog",
+  "version": 1,
+  "status": "active",
+  "state_machines": [
+    {
+      "name": "published-game",
+      "states": ["published", "retired"],
+      "transitions": [
+        {"from": "absent", "to": "published", "command": "catalog-approve"},
+        {"from": "published", "to": "published", "command": "catalog-approve", "versioned": true},
+        {"from": "published", "to": "retired", "command": "catalog-withdraw", "versioned": true}
+      ],
+      "stable_public_id": true,
+      "history": "append-only",
+      "audit_and_outbox_atomic": true,
+      "public_reads_require_state": "published"
+    }
+  ]
+}

@@ -2,21 +2,28 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
+from PIL import Image
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from app.modules.data_governance.adapters.local_package import LocalPackage
-from app.modules.data_governance.adapters.postgres_repository import PostgresRepository
+from app.modules.data_governance.adapters.postgres_repository import (
+    InvalidCorrection,
+    PostgresRepository,
+    ReviewConflict,
+)
 from app.modules.data_governance.application.ingest import (
     InvalidRecord,
     VersionConflict,
     ingest,
     parse_record,
 )
+from app.modules.data_governance.application.process import process_run
 from app.modules.data_governance.domain.models import PackageSnapshot
 from app.platform.config.settings import settings
 
@@ -595,3 +602,98 @@ def test_cli_reports_declared_errors(tmp_path: Path, capsys: pytest.CaptureFixtu
     )
     assert "Jogo sintético" not in output
     assert "raw_payload" not in summary
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_DB_TESTS") != "1",
+    reason="PostgreSQL efêmero do compose não está ativo",
+)
+def test_review_corrections_are_versioned_and_etag_guarded(tmp_path: Path) -> None:
+    source_name = f"review-{uuid4().hex}"
+    package = tmp_path / "package"
+    _package(package, source_name, "1", title="Título original")
+    cover = BytesIO()
+    Image.new("RGB", (4, 4), "blue").save(cover, format="PNG")
+    (package / "cover.png").write_bytes(cover.getvalue())
+    record_path = package / "game.json"
+    record = json.loads(record_path.read_text())
+    record["media"] = [
+        {
+            "path": "cover.png",
+            "role": "box_art",
+            "storage_right": "confirmed",
+            "publication_right": "confirmed",
+            "attribution": "RetroAchievements",
+        }
+    ]
+    record_path.write_text(json.dumps(record))
+
+    engine = create_engine(settings.database_url)
+    repository = PostgresRepository(engine)
+    ingested = ingest(LocalPackage(package), repository, "review-test")
+    processed = process_run(repository, UUID(str(ingested["id"])))
+    assert processed["review"] == 1
+
+    candidate = repository.review_candidate(UUID(str(ingested["id"])), "game")
+    assert candidate["state"] == "review"
+    assert candidate["cover"]["content"] is None  # Bytes require explicit private access.
+    etag = str(candidate["etag"])
+    corrected = repository.correct_review(
+        UUID(str(ingested["id"])),
+        "game",
+        "title",
+        "Título corrigido",
+        "Corrigir erro editorial",
+        etag,
+    )
+    assert corrected["values"]["title"] == "Título corrigido"
+    assert corrected["etag"] != etag
+    assert corrected["state"] == "review"
+    assert corrected["lineage"]["title"]["source"] == "human-review"
+    assert corrected["lineage"]["title"]["reason"] == "Corrigir erro editorial"
+    assert corrected["lineage"]["title"]["previous_etag"] == etag
+    assert corrected["lineage"]["title"]["resulting_etag"] == corrected["etag"]
+    assert len(corrected["corrections"]) == 1
+    assert corrected["corrections"][0]["previous_value"] == "Título original"
+    cover_candidate = repository.review_candidate(
+        UUID(str(ingested["id"])), "game", include_private_media=True
+    )
+    assert cover_candidate["cover"]["content"] == cover.getvalue()
+
+    with pytest.raises(ReviewConflict):
+        repository.correct_review(
+            UUID(str(ingested["id"])),
+            "game",
+            "title",
+            "Outro título",
+            "Tentativa obsoleta",
+            etag,
+        )
+    with pytest.raises(InvalidCorrection):
+        repository.correct_review(
+            UUID(str(ingested["id"])),
+            "game",
+            "price",
+            "99.00",
+            "Campo comercial proibido",
+            str(corrected["etag"]),
+        )
+
+    with engine.connect() as connection:
+        correction_count = connection.execute(
+            text("SELECT count(*) FROM data_governance.review_corrections WHERE run_id=:id"),
+            {"id": ingested["id"]},
+        ).scalar_one()
+        original = connection.execute(
+            text("""
+                SELECT sv.normalized_value
+                FROM data_governance.staging_values sv
+                JOIN data_governance.staging_records sr
+                  ON sr.run_id=sv.run_id AND sr.rule_version=sv.rule_version AND sr.evidence_id=sv.evidence_id
+                WHERE sr.run_id=:id AND sr.source_record_id='game' AND sv.attribute_path='title'
+            """),
+            {"id": ingested["id"]},
+        ).scalar_one()
+    assert correction_count == 1
+    assert original == "Título original"
+    engine.dispose()

@@ -20,3 +20,12 @@ def test_blank_database_url_fails_explicitly() -> None:
     with pytest.raises(ValidationError) as error:
         Settings(database_url="")
     assert "DATABASE_URL must not be blank" in str(error.value)
+
+
+def test_retroachievements_api_key_is_masked_in_settings_repr() -> None:
+    sentinel = "ra-private-sentinel-123"
+    configured = Settings(retroachievements_api_key=sentinel)
+
+    assert configured.retroachievements_api_key.get_secret_value() == sentinel
+    assert sentinel not in repr(configured)
+    assert "**********" in repr(configured.retroachievements_api_key)

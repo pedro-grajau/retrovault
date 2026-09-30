@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { healthApiV1HealthGetData, healthApiV1HealthGetErrors, healthApiV1HealthGetResponses, versionApiV1SystemVersionGetData, versionApiV1SystemVersionGetErrors, versionApiV1SystemVersionGetResponses } from './types.gen';
+import type { getBoxArtApiV1CatalogGamesGameIdBoxArtGetData, getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors, getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses, getGameApiV1CatalogGamesGameIdGetData, getGameApiV1CatalogGamesGameIdGetErrors, getGameApiV1CatalogGamesGameIdGetResponses, healthApiV1HealthGetData, healthApiV1HealthGetErrors, healthApiV1HealthGetResponses, listGamesApiV1CatalogGamesGetData, listGamesApiV1CatalogGamesGetErrors, listGamesApiV1CatalogGamesGetResponses, versionApiV1SystemVersionGetData, versionApiV1SystemVersionGetErrors, versionApiV1SystemVersionGetResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -17,6 +17,37 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
      */
     meta?: Record<string, unknown>;
 };
+
+export class CatalogService {
+    /**
+     * List Games
+     */
+    public static listGamesApiV1CatalogGamesGet<ThrowOnError extends boolean = true>(options?: Options<listGamesApiV1CatalogGamesGetData, ThrowOnError>) {
+        return (options?.client ?? client).get<listGamesApiV1CatalogGamesGetResponses, listGamesApiV1CatalogGamesGetErrors, ThrowOnError>({
+            responseType: 'json',
+            url: '/api/v1/catalog/games',
+            ...options
+        });
+    }
+    
+    /**
+     * Get Game
+     */
+    public static getGameApiV1CatalogGamesGameIdGet<ThrowOnError extends boolean = true>(options: Options<getGameApiV1CatalogGamesGameIdGetData, ThrowOnError>) {
+        return (options.client ?? client).get<getGameApiV1CatalogGamesGameIdGetResponses, getGameApiV1CatalogGamesGameIdGetErrors, ThrowOnError>({
+            responseType: 'json',
+            url: '/api/v1/catalog/games/{game_id}',
+            ...options
+        });
+    }
+    
+    /**
+     * Get Box Art
+     */
+    public static getBoxArtApiV1CatalogGamesGameIdBoxArtGet<ThrowOnError extends boolean = true>(options: Options<getBoxArtApiV1CatalogGamesGameIdBoxArtGetData, ThrowOnError>) {
+        return (options.client ?? client).get<getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses, getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors, ThrowOnError>({ url: '/api/v1/catalog/games/{game_id}/box-art', ...options });
+    }
+}
 
 export class SystemService {
     /**
