@@ -6,7 +6,9 @@ from app.modules.data_governance.domain.models import PackageSnapshot
 
 
 class PackageError(ValueError):
-    pass
+    def __init__(self, code: str, fingerprint: str | None = None) -> None:
+        super().__init__(code)
+        self.fingerprint = fingerprint
 
 
 class LocalCatalogSource(Protocol):
