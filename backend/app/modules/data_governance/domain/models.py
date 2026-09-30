@@ -67,6 +67,7 @@ class SnapshotRecord:
     error_code: str | None = None
     error_fingerprint: str | None = None
     media_bytes: tuple[tuple[str, bytes | None], ...] = ()
+    source_payload: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -74,3 +75,4 @@ class PackageSnapshot:
     manifest: Manifest
     package_hash: str
     records: tuple[SnapshotRecord, ...]
+    config_fingerprint: str = ""

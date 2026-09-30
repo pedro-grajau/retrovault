@@ -1,1 +1,29 @@
-{"owner":"data_governance","version":1,"status":"active","state_machines":[{"name":"ingest-run","states":["running","completed"],"transitions":[{"from":"running","to":"completed"}],"counters":["received","preserved","rejected","pending"]},{"name":"processing-record","states":["review","quarantine"],"transitions":[],"version_key":"run-id+rule-version+evidence-id","private":true}]}
+{
+  "owner": "data_governance",
+  "version": 1,
+  "status": "active",
+  "state_machines": [
+    {
+      "name": "ingest-run",
+      "states": ["running", "completed"],
+      "transitions": [{"from": "running", "to": "completed"}],
+      "counters": ["received", "preserved", "rejected", "pending"]
+    },
+    {
+      "name": "processing-record",
+      "states": ["review", "quarantine"],
+      "transitions": [],
+      "version_key": "run-id+rule-version+evidence-id",
+      "private": true
+    },
+    {
+      "name": "review-correction",
+      "states": ["appended"],
+      "transitions": [],
+      "version_key": "run-id+rule-version+evidence-id+revision",
+      "audit_fields": ["previous_value", "actor", "reason", "previous_etag", "resulting_etag"],
+      "immutable": true,
+      "commercial_fields_allowed": false
+    }
+  ]
+}

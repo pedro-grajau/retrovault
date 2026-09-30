@@ -360,9 +360,7 @@ def test_processing_persists_lineage_conflicts_idempotently_without_publication(
         )
         assert (
             connection.execute(
-                text(
-                    "SELECT count(*) FROM pg_tables WHERE schemaname IN ('catalog', 'commerce')"
-                )
+                text("SELECT count(*) FROM catalog.published_games")
             ).scalar_one()
             == 0
         )

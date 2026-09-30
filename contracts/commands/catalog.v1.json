@@ -1,1 +1,82 @@
-{"owner":"data_governance","version":1,"status":"active","commands":[{"name":"catalog-ingest","transport":"local-cli","input":"versioned-local-package","output":"ingest-run-summary","idempotency":"source+version+package-hash","errors":["invalid_package","source_version_conflict","ingestion_unavailable"]},{"name":"catalog-summary","transport":"local-cli","input":"run-id","output":"ingest-run-summary","errors":["run_not_found"]},{"name":"catalog-process","transport":"local-cli","input":"run-id+rule-version","output":"sanitized-processing-summary","idempotency":"run-id+rule-version","errors":["run_not_found","unknown_rule_version","ingestion_unavailable"]},{"name":"catalog-process-summary","transport":"local-cli","input":"run-id+rule-version","output":"sanitized-processing-summary","errors":["processing_not_found"]}]}
+{
+  "owner": "data_governance",
+  "version": 1,
+  "status": "active",
+  "commands": [
+    {
+      "name": "catalog-ingest",
+      "transport": "local-cli",
+      "input": "versioned-local-package",
+      "output": "ingest-run-summary",
+      "idempotency": "source+version+package-hash",
+      "errors": ["invalid_package", "source_version_conflict", "ingestion_unavailable"]
+    },
+    {
+      "name": "catalog-ra-ingest",
+      "transport": "private-local-cli",
+      "input": "versioned-retroachievements-id-manifest",
+      "secret": "RETROACHIEVEMENTS_API_KEY-from-private-backend-config",
+      "output": "ingest-run-summary",
+      "idempotency": "source+version+package-hash",
+      "errors": ["invalid_request", "source_version_conflict", "ingestion_unavailable"]
+    },
+    {
+      "name": "catalog-summary",
+      "transport": "local-cli",
+      "input": "run-id",
+      "output": "ingest-run-summary",
+      "errors": ["run_not_found"]
+    },
+    {
+      "name": "catalog-process",
+      "transport": "local-cli",
+      "input": "run-id+rule-version",
+      "output": "sanitized-processing-summary",
+      "idempotency": "run-id+rule-version",
+      "errors": ["run_not_found", "unknown_rule_version", "ingestion_unavailable"]
+    },
+    {
+      "name": "catalog-process-summary",
+      "transport": "local-cli",
+      "input": "run-id+rule-version",
+      "output": "sanitized-processing-summary",
+      "errors": ["processing_not_found"]
+    },
+    {
+      "name": "catalog-review",
+      "transport": "private-local-cli",
+      "input": "run-id+external-record-id+rule-version",
+      "output": "candidate-with-etag-and-lineage",
+      "private": true,
+      "errors": ["review_not_found"]
+    },
+    {
+      "name": "catalog-correct",
+      "transport": "private-local-cli",
+      "input": "run-id+external-record-id+field+value+reason+if-match",
+      "output": "append-only-correction-revision",
+      "idempotency": "etag-compare-and-swap",
+      "errors": ["invalid_request", "etag_conflict", "review_not_found"]
+    },
+    {
+      "name": "catalog-approve",
+      "transport": "private-local-cli",
+      "input": "run-id+external-record-id+reason+idempotency-key+if-match",
+      "output": "published-game-decision",
+      "delegates_to": "catalog-publication",
+      "idempotency": "global-key+request-hash",
+      "atomicity": "projection+audit+outbox",
+      "errors": ["candidate_not_eligible", "etag_conflict", "decision_conflict", "idempotency_key_reused"]
+    },
+    {
+      "name": "catalog-withdraw",
+      "transport": "private-local-cli",
+      "input": "public-id+reason+idempotency-key+if-match",
+      "output": "retired-game-decision",
+      "delegates_to": "catalog-publication",
+      "idempotency": "global-key+request-hash",
+      "atomicity": "projection+audit+outbox",
+      "errors": ["published_game_not_found", "etag_conflict", "decision_conflict", "idempotency_key_reused"]
+    }
+  ]
+}

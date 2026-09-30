@@ -37,7 +37,7 @@ def test_all_v1_contract_catalogs_are_owned_and_explicitly_versioned() -> None:
     assert found == REQUIRED
 
 
-def test_endpoint_matrix_contains_only_the_foundation_api() -> None:
+def test_endpoint_matrix_matches_the_foundation_and_published_catalog_api() -> None:
     payload = json.loads(
         (ROOT / "contracts" / "api" / "endpoint-matrix.v1.json").read_text()
     )
@@ -45,6 +45,9 @@ def test_endpoint_matrix_contains_only_the_foundation_api() -> None:
     assert endpoints == {
         ("GET", "/api/v1/health"),
         ("GET", "/api/v1/system/version"),
+        ("GET", "/api/v1/catalog/games"),
+        ("GET", "/api/v1/catalog/games/{game_id}"),
+        ("GET", "/api/v1/catalog/games/{game_id}/box-art"),
     }
     openapi_endpoints = {
         (method.upper(), path)
@@ -52,6 +55,21 @@ def test_endpoint_matrix_contains_only_the_foundation_api() -> None:
         for method in operations
     }
     assert openapi_endpoints == endpoints
+
+
+def test_publication_commands_and_state_contract_are_active() -> None:
+    commands = json.loads((ROOT / "contracts/commands/catalog.v1.json").read_text())
+    command_names = {item["name"] for item in commands["commands"]}
+    assert {"catalog-approve", "catalog-withdraw"} <= command_names
+    publication = json.loads(
+        (ROOT / "contracts/states/publication.v1.json").read_text()
+    )
+    assert publication["owner"] == "catalog"
+    assert publication["status"] == "active"
+    state_machine = publication["state_machines"][0]
+    assert state_machine["states"] == ["published", "retired"]
+    assert state_machine["stable_public_id"] is True
+    assert state_machine["audit_and_outbox_atomic"] is True
 
 
 def test_catalog_manifest_and_record_schemas_cover_parser_fixtures() -> None:

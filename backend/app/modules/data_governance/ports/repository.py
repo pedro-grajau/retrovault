@@ -31,6 +31,8 @@ class IngestionRepository(Protocol):
         record: CatalogRecord,
         payload_hash: str,
         media_bytes: dict[str, bytes | None],
+        *,
+        source_payload: bytes | None = None,
     ) -> None: ...
 
     def fail(
