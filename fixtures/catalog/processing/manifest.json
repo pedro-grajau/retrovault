@@ -1,0 +1,16 @@
+{
+  "source": "synthetic-processing",
+  "version": "1",
+  "captured_at": "2026-09-29T12:00:00Z",
+  "actor": "Eduardo",
+  "records": [
+    {
+      "id": "complete",
+      "file": "complete.json"
+    },
+    {
+      "id": "conflict",
+      "file": "conflict.json"
+    }
+  ]
+}
