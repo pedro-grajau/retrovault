@@ -12,6 +12,11 @@ from sqlalchemy import create_engine
 from app.modules.data_governance.adapters.local_package import LocalPackage
 from app.modules.data_governance.adapters.postgres_repository import PostgresRepository
 from app.modules.data_governance.application.ingest import VersionConflict, ingest
+from app.modules.data_governance.application.process import (
+    RunNotFound,
+    UnknownRuleVersion,
+    process_run,
+)
 from app.modules.data_governance.ports.source import PackageError
 from app.platform.config.settings import settings
 
@@ -29,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     ingest_parser.add_argument("package", type=Path)
     summary_parser = commands.add_parser("summary")
     summary_parser.add_argument("run_id", type=UUID)
+    process_parser = commands.add_parser("process")
+    process_parser.add_argument("run_id", type=UUID)
+    process_parser.add_argument("--rule-version", default="editorial-v1")
+    process_summary_parser = commands.add_parser("process-summary")
+    process_summary_parser.add_argument("run_id", type=UUID)
+    process_summary_parser.add_argument("--rule-version", default="editorial-v1")
     args = parser.parse_args(argv)
     try:
         engine = create_engine(settings.database_url)
@@ -37,12 +48,19 @@ def main(argv: list[str] | None = None) -> int:
             result = ingest(
                 LocalPackage(args.package), repository, settings.app_version
             )
-        else:
+        elif args.command == "summary":
             summary = repository.summary(args.run_id)
             if summary is None:
                 sys.stdout.write(json.dumps({"code": "run_not_found"}) + "\n")
                 return 1
             result = summary
+        elif args.command == "process":
+            result = process_run(repository, args.run_id, args.rule_version)
+        else:
+            result = repository.processing_summary(args.run_id, args.rule_version)
+            if result is None:
+                sys.stdout.write(json.dumps({"code": "processing_not_found"}) + "\n")
+                return 1
         sys.stdout.write(
             json.dumps(
                 result, default=_json_default, ensure_ascii=False, sort_keys=True
@@ -52,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except VersionConflict:
         sys.stdout.write(json.dumps({"code": "source_version_conflict"}) + "\n")
+        return 2
+    except RunNotFound:
+        sys.stdout.write(json.dumps({"code": "run_not_found"}) + "\n")
+        return 1
+    except UnknownRuleVersion:
+        sys.stdout.write(json.dumps({"code": "unknown_rule_version"}) + "\n")
         return 2
     except PackageError, OSError, ValueError:
         sys.stdout.write(json.dumps({"code": "invalid_package"}) + "\n")

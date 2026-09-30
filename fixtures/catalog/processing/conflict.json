@@ -1,0 +1,18 @@
+{
+  "id": "conflict",
+  "attributes": {
+    "title": "Jogo sintético",
+    "platform": "SNES",
+    "publisher": "Editora sintética",
+    "genre": "Aventura"
+  },
+  "media": [
+    {
+      "path": "cover.png",
+      "role": "box_art",
+      "storage_right": "confirmed",
+      "publication_right": "confirmed",
+      "attribution": "Eduardo"
+    }
+  ]
+}

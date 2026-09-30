@@ -1,4 +1,4 @@
-"""Leitura confinada a arquivos locais; não copia nem busca mídia."""
+"""Leitura confinada do pacote e de seus bytes de mídia privada."""
 
 import hashlib
 import os
@@ -19,6 +19,9 @@ from app.modules.data_governance.ports.source import PackageError
 _RFC3339_DATETIME = re.compile(
     r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})"
 )
+
+MAX_MEDIA_BYTES = 5_000_000
+MAX_PACKAGE_MEDIA_BYTES = 128 * 1024 * 1024
 
 
 class LocalPackage:
@@ -76,10 +79,47 @@ class LocalPackage:
             raise PackageError("record_too_large", content_hash.hexdigest())
         return bytes(payload)
 
+    def _read_media(
+        self, directory_fd: int, filename: str, max_bytes: int = MAX_MEDIA_BYTES
+    ) -> bytes:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+\.(png|jpg|jpeg|webp)", filename, re.I):
+            raise PackageError("invalid_media_name")
+        max_bytes = min(max_bytes, MAX_MEDIA_BYTES)
+        if max_bytes <= 0:
+            raise PackageError("media_package_limit")
+        try:
+            descriptor = os.open(
+                filename,
+                os.O_RDONLY
+                | os.O_NOFOLLOW
+                | os.O_NONBLOCK
+                | os.O_CLOEXEC,
+                dir_fd=directory_fd,
+            )
+            with os.fdopen(descriptor, "rb") as file:
+                if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                    raise PackageError("media_unavailable")
+                payload = file.read(max_bytes + 1)
+        except OSError as exc:
+            raise PackageError("media_unavailable") from exc
+        if len(payload) > max_bytes:
+            raise PackageError(
+                "media_package_limit"
+                if max_bytes < MAX_MEDIA_BYTES
+                else "media_too_large"
+            )
+        return payload
+
     def _manifest(self, raw: bytes) -> Manifest:
         try:
             data = strict_json_loads(raw)
-            if not isinstance(data, dict) or set(data) != {"source", "version", "captured_at", "actor", "records"}:
+            if not isinstance(data, dict) or set(data) != {
+                "source",
+                "version",
+                "captured_at",
+                "actor",
+                "records",
+            }:
                 raise ValueError()
             source, version, actor = (data[key] for key in ("source", "version", "actor"))
             if not all(
@@ -153,22 +193,62 @@ class LocalPackage:
 
             add(manifest_bytes)
             records: list[SnapshotRecord] = []
+            total_media_bytes = 0
+            media_cache: dict[str, bytes | None] = {}
             for ref in manifest.records:
                 add(ref.record_id.encode())
                 add(ref.file.encode())
                 try:
                     payload = self._read(directory_fd, ref.file)
                     add(payload)
-                    records.append(SnapshotRecord(payload))
+                    media_bytes: list[tuple[str, bytes | None]] = []
+                    try:
+                        data = strict_json_loads(payload)
+                        if isinstance(data, dict) and isinstance(data.get("media"), list):
+                            for item in data["media"]:
+                                if not isinstance(item, dict) or not isinstance(
+                                    item.get("path"), str
+                                ):
+                                    continue
+                                path = item["path"]
+                                add(path.encode())
+                                storage_right = item.get("storage_right", "unknown")
+                                if storage_right != "confirmed":
+                                    media_payload = None
+                                    add(b"storage_right_not_confirmed")
+                                elif path in media_cache:
+                                    media_payload = media_cache[path]
+                                    if media_payload is not None:
+                                        add(media_payload)
+                                    else:
+                                        add(b"media_unavailable_or_over_limit")
+                                else:
+                                    try:
+                                        media_payload = self._read_media(
+                                            directory_fd,
+                                            path,
+                                            MAX_PACKAGE_MEDIA_BYTES - total_media_bytes,
+                                        )
+                                        total_media_bytes += len(media_payload)
+                                        media_cache[path] = media_payload
+                                        add(media_payload)
+                                    except PackageError as exc:
+                                        media_payload = None
+                                        media_cache[path] = None
+                                        add(str(exc).encode())
+                                media_bytes.append((path, media_payload))
+                    except (UnicodeError, ValueError):
+                        pass
+                    records.append(
+                        SnapshotRecord(payload, media_bytes=tuple(media_bytes))
+                    )
                 except PackageError as exc:
                     # Falhas e o hash completo de registros grandes integram a identidade.
                     code = str(exc.args[0])
                     add(code.encode())
                     if exc.fingerprint is not None:
                         add(exc.fingerprint.encode())
-                    records.append(
-                        SnapshotRecord(None, code, exc.fingerprint)
-                    )
+                    records.append(SnapshotRecord(None, code, exc.fingerprint))
             return PackageSnapshot(manifest, digest.hexdigest(), tuple(records))
         finally:
             os.close(directory_fd)

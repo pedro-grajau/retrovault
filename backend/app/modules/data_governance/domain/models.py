@@ -43,6 +43,7 @@ class Manifest:
 @dataclass(frozen=True)
 class MediaRights:
     path: str
+    role: str | None
     storage: Right
     publication: Right
     attribution: str
@@ -65,6 +66,7 @@ class SnapshotRecord:
     payload: bytes | None
     error_code: str | None = None
     error_fingerprint: str | None = None
+    media_bytes: tuple[tuple[str, bytes | None], ...] = ()
 
 
 @dataclass(frozen=True)

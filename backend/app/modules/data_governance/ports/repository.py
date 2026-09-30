@@ -1,7 +1,7 @@
 """Contrato da persistência transacional da ingestão."""
 
 from contextlib import AbstractContextManager
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.data_governance.domain.models import CatalogRecord, Manifest
@@ -30,6 +30,7 @@ class IngestionRepository(Protocol):
         manifest: Manifest,
         record: CatalogRecord,
         payload_hash: str,
+        media_bytes: dict[str, bytes | None],
     ) -> None: ...
 
     def fail(
@@ -41,3 +42,18 @@ class IngestionRepository(Protocol):
     ) -> None: ...
 
     def summary(self, run_id: UUID) -> dict[str, object] | None: ...
+
+
+class ProcessingRepository(Protocol):
+    def processing_guard(
+        self, run_id: UUID, rule_version: str
+    ) -> AbstractContextManager[None]: ...
+    def processing_inputs(self, run_id: UUID) -> list[dict[str, Any]] | None: ...
+
+    def processing_peers(self, run_id: UUID, rule_version: str) -> list[Any]: ...
+    def processing_summary(
+        self, run_id: UUID, rule_version: str
+    ) -> dict[str, object] | None: ...
+    def save_processing(
+        self, run_id: UUID, rule_version: str, fingerprint: str, candidates: list[Any]
+    ) -> None: ...

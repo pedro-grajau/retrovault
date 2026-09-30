@@ -29,6 +29,7 @@ ALLOWED_ATTRIBUTES = {
     "edition",
     "genre",
     "developer",
+    "publisher",
     "year",
     "rating",
     "description",
@@ -43,15 +44,15 @@ def parse_record(record_id: str, raw: str) -> CatalogRecord:
         if not isinstance(data, dict) or data.get("id") != record_id:
             raise ValueError()
         attributes = data.get("attributes", {})
-        if (
-            not isinstance(attributes, dict)
-            or set(attributes) - ALLOWED_ATTRIBUTES
-        ):
+        if not isinstance(attributes, dict) or set(attributes) - ALLOWED_ATTRIBUTES:
             raise ValueError()
         if set(data) - {"id", "attributes", "media"} or set(data) & FORBIDDEN_FIELDS:
             raise ValueError()
         if any(
-            (not isinstance(value, list) or not all(isinstance(item, str) for item in value))
+            (
+                not isinstance(value, list)
+                or not all(isinstance(item, str) for item in value)
+            )
             if key == "included_items"
             else not isinstance(value, str)
             for key, value in attributes.items()
@@ -63,13 +64,15 @@ def parse_record(record_id: str, raw: str) -> CatalogRecord:
         if any(
             not isinstance(item, dict)
             or "path" not in item
-            or set(item) - {"path", "storage_right", "publication_right", "attribution"}
+            or set(item)
+            - {"path", "role", "storage_right", "publication_right", "attribution"}
             for item in media_data
         ):
             raise ValueError()
         media = tuple(
             MediaRights(
                 item["path"],
+                item.get("role"),
                 Right(item.get("storage_right", "unknown")),
                 Right(item.get("publication_right", "unknown")),
                 item.get("attribution", ""),
@@ -80,6 +83,7 @@ def parse_record(record_id: str, raw: str) -> CatalogRecord:
             not isinstance(item.path, str)
             or not item.path
             or not isinstance(item.attribution, str)
+            or item.role not in (None, "box_art")
             for item in media
         ):
             raise ValueError()
@@ -126,7 +130,9 @@ def _ingest_snapshot(
     outcomes = repository.outcomes(run_id)
     preserved = sum(outcome == "preserved" for outcome in outcomes.values())
     rejected = sum(outcome == "rejected" for outcome in outcomes.values())
-    for reference, snapshot_record in zip(manifest.records, snapshot.records, strict=True):
+    for reference, snapshot_record in zip(
+        manifest.records, snapshot.records, strict=True
+    ):
         if reference.record_id in outcomes:
             continue
         try:
@@ -143,7 +149,14 @@ def _ingest_snapshot(
                 NAMESPACE_URL,
                 f"retrovault:evidence:{manifest.source}:{reference.record_id}:{payload_hash}",
             )
-            repository.preserve(run_id, evidence_id, manifest, record, payload_hash)
+            repository.preserve(
+                run_id,
+                evidence_id,
+                manifest,
+                record,
+                payload_hash,
+                dict(snapshot_record.media_bytes),
+            )
             preserved += 1
         except PackageError, InvalidRecord:
             repository.fail(run_id, reference.record_id, "record_rejected", uuid4())
