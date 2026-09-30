@@ -30,4 +30,10 @@ db_name="$(compose exec -T db printenv POSTGRES_DB)"
 actual="$(compose exec -T db psql -U "$db_user" -d "$db_name" -Atc "SELECT string_agg(nspname, ' ' ORDER BY nspname) FROM pg_namespace WHERE nspname IN ('catalog','commerce','concierge','data_governance','platform','quality','rentals');")"
 test "$actual" = "$expected"
 
+compose run --rm --no-deps \
+  --volume "$PWD/backend/tests:/app/backend/tests:ro" \
+  --volume "$PWD/fixtures:/app/fixtures:ro" \
+  --env RUN_DB_TESTS=1 \
+  backend pytest tests/data_governance/test_ingestion.py -q
+
 echo "Compose smoke passed: API, frontend and seven module schemas are healthy"
