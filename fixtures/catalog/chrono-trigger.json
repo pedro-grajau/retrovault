@@ -1,0 +1,13 @@
+{
+  "id": "chrono-trigger",
+  "attributes": {
+    "title": "Chrono Trigger",
+    "platform": "SNES",
+    "region": "NA",
+    "edition": "Standard",
+    "description": "Aventura temporal demonstrativa."
+  },
+  "media": [
+    {"path": "cover-front", "storage_right": "unknown", "publication_right": "unknown", "attribution": "Ilustração sintética de demonstração"}
+  ]
+}

@@ -1,1 +1,1 @@
-{"owner":"platform","version":1,"status":"reserved","state_machines":[],"note":"State machines are introduced with their governed aggregate."}
+{"owner":"data_governance","version":1,"status":"active","state_machines":[{"name":"ingest-run","states":["running","completed"],"transitions":[{"from":"running","to":"completed"}],"counters":["received","preserved","rejected","pending"]}]}

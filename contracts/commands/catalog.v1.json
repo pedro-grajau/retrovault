@@ -1,1 +1,1 @@
-{"owner":"platform","version":1,"status":"reserved","commands":[],"note":"Commands are introduced by the story that owns their behavior."}
+{"owner":"data_governance","version":1,"status":"active","commands":[{"name":"catalog-ingest","transport":"local-cli","input":"versioned-local-package","output":"ingest-run-summary","idempotency":"source+version+package-hash","errors":["invalid_package","source_version_conflict","ingestion_unavailable"]},{"name":"catalog-summary","transport":"local-cli","input":"run-id","output":"ingest-run-summary","errors":["run_not_found"]}]}

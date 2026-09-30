@@ -1,0 +1,10 @@
+{
+  "source": "eduardo-synthetic",
+  "version": "1.0.0",
+  "captured_at": "2026-09-29T12:00:00Z",
+  "actor": "Eduardo",
+  "records": [
+    {"id": "chrono-trigger", "file": "chrono-trigger.json"},
+    {"id": "sonic-2", "file": "sonic-2.json"}
+  ]
+}
