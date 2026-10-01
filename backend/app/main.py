@@ -7,13 +7,23 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import create_engine
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
+from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepository
+from app.modules.catalog.api.router import configure_services
 from app.modules.catalog.api.router import router as catalog_router
+from app.modules.commerce.adapters.postgres_offers import PostgresOfferReader
 from app.platform.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+_database_engine = create_engine(settings.database_url, pool_pre_ping=True)
+configure_services(
+    PostgresCatalogRepository(_database_engine),
+    PostgresOfferReader(_database_engine),
+)
 
 
 class VersionResponse(BaseModel):

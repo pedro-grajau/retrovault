@@ -85,9 +85,27 @@ export type GameAttributes = {
 };
 
 /**
+ * GameFacetsResponse
+ */
+export type GameFacetsResponse = {
+    /**
+     * Genres
+     */
+    genres: Array<string>;
+    /**
+     * Platforms
+     */
+    platforms: Array<string>;
+};
+
+/**
  * GameListResponse
  */
 export type GameListResponse = {
+    /**
+     * Commerce Status
+     */
+    commerce_status: 'available' | 'unavailable';
     /**
      * Items
      */
@@ -115,6 +133,10 @@ export type GameResponse = {
      * Id
      */
     id: string;
+    /**
+     * Offers
+     */
+    offers?: Array<OfferResponse> | null;
     /**
      * Origin By Attribute
      */
@@ -155,6 +177,44 @@ export type HTTPValidationError = {
      * Detail
      */
     detail?: Array<ValidationError>;
+};
+
+/**
+ * OfferResponse
+ */
+export type OfferResponse = {
+    /**
+     * Available Units
+     */
+    available_units: number;
+    /**
+     * Condition Summary
+     */
+    condition_summary: string;
+    /**
+     * Currency
+     */
+    currency: 'BRL';
+    /**
+     * Demo Rank
+     */
+    demo_rank: number;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Mode
+     */
+    mode: 'purchase' | 'rental';
+    /**
+     * Price Minor
+     */
+    price_minor: number;
+    /**
+     * Sandbox
+     */
+    sandbox: boolean;
 };
 
 /**
@@ -199,6 +259,22 @@ export type VersionResponse = {
     correlation_id: string;
 };
 
+export type listFacetsApiV1CatalogFacetsGetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/catalog/facets';
+};
+
+export type listFacetsApiV1CatalogFacetsGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: GameFacetsResponse;
+};
+
+export type listFacetsApiV1CatalogFacetsGetResponse = listFacetsApiV1CatalogFacetsGetResponses[keyof listFacetsApiV1CatalogFacetsGetResponses];
+
 export type listGamesApiV1CatalogGamesGetData = {
     body?: never;
     path?: never;
@@ -215,6 +291,18 @@ export type listGamesApiV1CatalogGamesGetData = {
          * Platform
          */
         platform?: string | null;
+        /**
+         * Genre
+         */
+        genre?: string | null;
+        /**
+         * Availability
+         */
+        availability?: 'available' | 'unavailable' | null;
+        /**
+         * Sort
+         */
+        sort?: 'catalog' | 'demo_popular';
     };
     url: '/api/v1/catalog/games';
 };

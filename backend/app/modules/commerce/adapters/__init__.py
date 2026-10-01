@@ -1,1 +1,1 @@
-"""adapters boundary; intentionally empty in Story 1.1."""
+"""Commerce infrastructure adapters."""

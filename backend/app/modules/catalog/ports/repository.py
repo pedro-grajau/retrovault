@@ -7,9 +7,18 @@ from app.modules.catalog.domain.publication import PublishedGame
 
 
 class PublishedCatalog(Protocol):
+    def list_facets(self) -> dict[str, list[str]]: ...
+
     def list_games(
-        self, *, limit: int, cursor: str | None = None, platform: str | None = None
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        platform: str | None = None,
+        genre: str | None = None,
     ) -> tuple[list[PublishedGame], str | None]: ...
+
+    def encode_cursor(self, game: PublishedGame) -> str: ...
 
     def get_game(self, game_id: UUID) -> PublishedGame | None: ...
 

@@ -33,6 +33,33 @@ class PostgresCatalogRepository:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
 
+    def list_facets(self) -> dict[str, list[str]]:
+        query = text("""
+            SELECT 'platform' AS kind, g.platform AS value
+            FROM catalog.published_games g
+            WHERE g.active AND length(trim(g.platform)) > 0
+            UNION
+            SELECT 'genre' AS kind, g.editorial->'attributes'->>'genre' AS value
+            FROM catalog.published_games g
+            WHERE g.active
+              AND length(trim(coalesce(g.editorial->'attributes'->>'genre', ''))) > 0
+            ORDER BY kind, value
+        """)
+        values: dict[str, dict[str, str]] = {"platforms": {}, "genres": {}}
+        with self.engine.connect() as connection:
+            rows = connection.execute(query).mappings()
+            for row in rows:
+                key = "platforms" if row["kind"] == "platform" else "genres"
+                value = row["value"]
+                normalized = value.lower()
+                current = values[key].get(normalized)
+                if current is None or value < current:
+                    values[key][normalized] = value
+        return {
+            key: sorted(group.values(), key=lambda value: (value.lower(), value))
+            for key, group in values.items()
+        }
+
     @staticmethod
     def _etag(value: str) -> str:
         return value.strip().strip('"')
@@ -50,6 +77,10 @@ class PostgresCatalogRepository:
     @staticmethod
     def _cursor_encode(game_id: UUID) -> str:
         return base64.urlsafe_b64encode(str(game_id).encode()).decode().rstrip("=")
+
+    @classmethod
+    def encode_cursor(cls, game: PublishedGame) -> str:
+        return cls._cursor_encode(game.id)
 
     @staticmethod
     def _cursor_decode(value: str | None) -> UUID | None:
@@ -93,7 +124,12 @@ class PostgresCatalogRepository:
         )
 
     def list_games(
-        self, *, limit: int, cursor: str | None = None, platform: str | None = None
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        platform: str | None = None,
+        genre: str | None = None,
     ) -> tuple[list[PublishedGame], str | None]:
         decoded = self._cursor_decode(cursor)
         params: dict[str, Any] = {"limit": limit + 1}
@@ -104,6 +140,9 @@ class PostgresCatalogRepository:
         if platform:
             clauses.append("lower(g.platform) = lower(:platform)")
             params["platform"] = platform
+        if genre:
+            clauses.append("lower(g.editorial->'attributes'->>'genre') = lower(:genre)")
+            params["genre"] = genre
         query = text(f"""
             SELECT g.id, g.title, g.platform, g.editorial, g.source,
                    g.source_record_id, g.version, g.etag, g.updated_at AS verified_at,

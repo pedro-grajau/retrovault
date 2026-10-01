@@ -45,6 +45,7 @@ def test_endpoint_matrix_matches_the_foundation_and_published_catalog_api() -> N
     assert endpoints == {
         ("GET", "/api/v1/health"),
         ("GET", "/api/v1/system/version"),
+        ("GET", "/api/v1/catalog/facets"),
         ("GET", "/api/v1/catalog/games"),
         ("GET", "/api/v1/catalog/games/{game_id}"),
         ("GET", "/api/v1/catalog/games/{game_id}/box-art"),

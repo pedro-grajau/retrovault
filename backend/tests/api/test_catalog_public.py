@@ -7,6 +7,7 @@ import pytest
 from app.main import app
 from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepository
 from app.modules.catalog.api import router as catalog_router
+from app.modules.catalog.application.discovery import PublicDiscovery
 from app.modules.catalog.domain.publication import PublishedGame
 
 
@@ -14,7 +15,7 @@ class FakePublishedCatalog:
     def __init__(self, game: PublishedGame | None) -> None:
         self.game = game
 
-    def list_games(self, *, limit: int, cursor=None, platform=None):
+    def list_games(self, *, limit: int, cursor=None, platform=None, genre=None):
         PostgresCatalogRepository._cursor_decode(cursor)
         games = [self.game] if self.game is not None else []
         return games[:limit], None
@@ -26,6 +27,18 @@ class FakePublishedCatalog:
         if self.game is None or self.game.id != game_id:
             return None
         return b"published-cover", "image/png", self.game.cover_hash
+
+
+class FakeCommerceReader:
+    def list_offers(self, game_ids):
+        return {}
+
+
+def _wire_public_catalog(monkeypatch, catalog):
+    monkeypatch.setattr(catalog_router, "_catalog", catalog)
+    monkeypatch.setattr(
+        catalog_router, "_discovery", PublicDiscovery(catalog, FakeCommerceReader())
+    )
 
 
 def _game() -> PublishedGame:
@@ -64,7 +77,7 @@ def _game() -> PublishedGame:
 @pytest.mark.anyio
 async def test_public_catalog_exposes_only_published_projection(monkeypatch) -> None:
     game = _game()
-    monkeypatch.setattr(catalog_router, "_catalog", FakePublishedCatalog(game))
+    _wire_public_catalog(monkeypatch, FakePublishedCatalog(game))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/catalog/games")
@@ -134,7 +147,7 @@ async def test_cover_route_serves_only_published_media(monkeypatch) -> None:
 
 @pytest.mark.anyio
 async def test_public_list_rejects_invalid_cursor(monkeypatch) -> None:
-    monkeypatch.setattr(catalog_router, "_catalog", FakePublishedCatalog(_game()))
+    _wire_public_catalog(monkeypatch, FakePublishedCatalog(_game()))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/catalog/games?cursor=not-a-cursor")
