@@ -185,15 +185,15 @@ class PublicDiscovery:
         ranked = sorted(
             all_games,
             key=lambda game: (
+                min(
+                    (offer.demo_rank for offer in all_offers[game.id]),
+                    default=2**31,
+                ),
                 -len(
                     {
                         offer.mode
                         for offer in all_offers[game.id]
                     }
-                ),
-                min(
-                    (offer.demo_rank for offer in all_offers[game.id]),
-                    default=2**31,
                 ),
                 str(game.id),
             ),

@@ -21,10 +21,9 @@ test("sandbox shell is keyboard accessible and versioned", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: /Clássicos preservados/ }),
   ).toBeVisible()
-  await expect(
-    page.getByText("api-verified-1.1", { exact: true }),
-  ).toBeVisible()
-  await expect(page.getByText("APP_VERSION api-verified-1.1")).toBeVisible()
+  await expect(page.getByRole("contentinfo")).toContainText(
+    "APP_VERSION api-verified-1.1",
+  )
   const accessibility = await new AxeBuilder({ page }).analyze()
   expect(accessibility.violations).toEqual([])
 })

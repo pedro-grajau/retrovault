@@ -312,6 +312,10 @@ export type listGamesApiV1CatalogGamesGetErrors = {
      * Validation Error
      */
     422: HTTPValidationError;
+    /**
+     * Commerce indisponível.
+     */
+    503: unknown;
 };
 
 export type listGamesApiV1CatalogGamesGetError = listGamesApiV1CatalogGamesGetErrors[keyof listGamesApiV1CatalogGamesGetErrors];

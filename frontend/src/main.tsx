@@ -230,45 +230,6 @@ function HomePage() {
         <SearchPreview />
       </section>
 
-      <section className="home-platforms" aria-labelledby="platform-title">
-        <div className="section-heading compact-heading">
-          <div>
-            <p className="eyebrow">EXPLORE POR GERAÇÃO</p>
-            <h2 id="platform-title">Plataformas</h2>
-          </div>
-          <a className="text-link" href="/catalog">
-            Ver catálogo completo <span aria-hidden="true">→</span>
-          </a>
-        </div>
-        {facetsState === "loading" ? (
-          <p className="state-message" role="status" aria-busy="true">
-            Carregando plataformas publicadas…
-          </p>
-        ) : facetsState === "error" ? (
-          <p className="state-message" role="status">
-            Não foi possível carregar as plataformas. Explore o{" "}
-            <a href="/catalog">catálogo</a>.
-          </p>
-        ) : platforms.length ? (
-          <ul className="platform-list">
-            {platforms.map((platform) => (
-              <li key={platform}>
-                <a
-                  className="platform-chip"
-                  href={`/catalog?${new URLSearchParams({ platform })}`}
-                >
-                  {platform}
-                </a>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="state-message" role="status">
-            As plataformas aparecerão aqui quando houver jogos publicados.
-          </p>
-        )}
-      </section>
-
       <section
         className="popular-section"
         aria-labelledby="popular-title"
@@ -328,6 +289,45 @@ function HomePage() {
         <p className="visually-hidden" role="status" aria-live="polite">
           {popularState === "ready" && popular.length > 0 ? popularMessage : ""}
         </p>
+      </section>
+
+      <section className="home-platforms" aria-labelledby="platform-title">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">EXPLORE POR GERAÇÃO</p>
+            <h2 id="platform-title">Plataformas</h2>
+          </div>
+          <a className="text-link" href="/catalog">
+            Ver catálogo completo <span aria-hidden="true">→</span>
+          </a>
+        </div>
+        {facetsState === "loading" ? (
+          <p className="state-message" role="status" aria-busy="true">
+            Carregando plataformas publicadas…
+          </p>
+        ) : facetsState === "error" ? (
+          <p className="state-message" role="status">
+            Não foi possível carregar as plataformas. Explore o{" "}
+            <a href="/catalog">catálogo</a>.
+          </p>
+        ) : platforms.length ? (
+          <ul className="platform-list">
+            {platforms.map((platform) => (
+              <li key={platform}>
+                <a
+                  className="platform-chip"
+                  href={`/catalog?${new URLSearchParams({ platform })}`}
+                >
+                  {platform}
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="state-message" role="status">
+            As plataformas aparecerão aqui quando houver jogos publicados.
+          </p>
+        )}
       </section>
     </main>
   )
@@ -627,9 +627,16 @@ function CatalogPage() {
           ) : catalog.games.length ? (
             <>
               {catalog.stale && (
-                <p className="stale-note" role="status">
-                  {catalog.message}
-                </p>
+                <div className="stale-note">
+                  <p role="status">{catalog.message}</p>
+                  <button
+                    className="button-secondary"
+                    type="button"
+                    onClick={() => void load(params)}
+                  >
+                    Tentar atualizar
+                  </button>
+                </div>
               )}
               <div className="game-grid catalog-grid">
                 {catalog.games.map((game) => (

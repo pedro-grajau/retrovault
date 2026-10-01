@@ -549,7 +549,7 @@ h1 {
   font-size: 1.1rem;
 }
 .clear-filters {
-  min-height: 40px;
+  min-height: 44px;
   padding: 0.35rem 0.5rem;
   border: 0;
   border-radius: 0.35rem;
@@ -593,6 +593,9 @@ h1 {
   margin: 0 0 1rem;
   padding: 0.75rem 0.9rem;
   color: var(--warning);
+}
+.stale-note p {
+  margin: 0 0 0.75rem;
 }
 .catalog-grid {
   row-gap: 1rem;

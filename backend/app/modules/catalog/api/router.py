@@ -169,7 +169,12 @@ async def list_facets() -> GameFacetsResponse:
     return GameFacetsResponse(**facets)
 
 
-@router.get("/games", response_model=GameListResponse, response_model_exclude_none=True)
+@router.get(
+    "/games",
+    response_model=GameListResponse,
+    response_model_exclude_none=True,
+    responses={503: {"description": "Commerce indisponível."}},
+)
 async def list_games(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=1024),

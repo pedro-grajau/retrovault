@@ -616,6 +616,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Commerce indispon\u00edvel."
           }
         },
         "summary": "List Games",

@@ -50,7 +50,7 @@ class PostgresCatalogRepository:
             rows = connection.execute(query).mappings()
             for row in rows:
                 key = "platforms" if row["kind"] == "platform" else "genres"
-                value = row["value"]
+                value = row["value"].strip()
                 normalized = value.lower()
                 current = values[key].get(normalized)
                 if current is None or value < current:
