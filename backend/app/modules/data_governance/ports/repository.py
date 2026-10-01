@@ -4,7 +4,11 @@ from contextlib import AbstractContextManager
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.modules.data_governance.domain.models import CatalogRecord, Manifest
+from app.modules.data_governance.domain.models import (
+    CatalogRecord,
+    Manifest,
+    SourceResponse,
+)
 
 
 class IngestionRepository(Protocol):
@@ -36,6 +40,7 @@ class IngestionRepository(Protocol):
         media_bytes: dict[str, bytes | None],
         *,
         source_payload: bytes | None = None,
+        source_responses: tuple[SourceResponse, ...] = (),
     ) -> None: ...
 
     def fail(

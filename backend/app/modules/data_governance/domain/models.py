@@ -19,6 +19,22 @@ def strict_json_loads(raw: str | bytes) -> Any:
     return json.loads(raw, object_pairs_hook=unique_object)
 
 
+PROGRESSION_METRIC_FIELDS = frozenset(
+    {
+        "NumDistinctPlayers",
+        "TimesUsedInBeatMedian",
+        "TimesUsedInHardcoreBeatMedian",
+        "MedianTimeToBeat",
+        "MedianTimeToBeatHardcore",
+        "TimesUsedInCompletionMedian",
+        "TimesUsedInMasteryMedian",
+        "MedianTimeToComplete",
+        "MedianTimeToMaster",
+        "NumAchievements",
+    }
+)
+
+
 class Right(StrEnum):
     CONFIRMED = "confirmed"
     DENIED = "denied"
@@ -59,6 +75,22 @@ class CatalogRecord:
     raw_payload: str
     attributes: tuple[str, ...]
     media: tuple[MediaRights, ...]
+    source_metrics: tuple[SourceMetric, ...] = ()
+
+
+@dataclass(frozen=True)
+class SourceMetric:
+    name: str
+    value: int
+    endpoint: str
+    captured_at: datetime
+
+
+@dataclass(frozen=True)
+class SourceResponse:
+    endpoint: str
+    payload: bytes
+    captured_at: datetime
 
 
 @dataclass(frozen=True)
@@ -68,6 +100,7 @@ class SnapshotRecord:
     error_fingerprint: str | None = None
     media_bytes: tuple[tuple[str, bytes | None], ...] = ()
     source_payload: bytes | None = None
+    source_responses: tuple[SourceResponse, ...] = ()
 
 
 @dataclass(frozen=True)

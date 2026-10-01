@@ -12,7 +12,12 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from PIL import Image
 from sqlalchemy import Connection, Engine, text
 
-from app.modules.data_governance.domain.models import CatalogRecord, Manifest, Right
+from app.modules.data_governance.domain.models import (
+    CatalogRecord,
+    Manifest,
+    Right,
+    SourceResponse,
+)
 from app.modules.data_governance.domain.normalization import (
     Candidate,
     candidate_from_evidence,
@@ -140,6 +145,7 @@ class PostgresRepository:
         media_bytes: dict[str, bytes | None] | None = None,
         *,
         source_payload: bytes | None = None,
+        source_responses: tuple[SourceResponse, ...] = (),
     ) -> None:
         with self.engine.begin() as connection:
             inserted = connection.execute(
@@ -219,6 +225,58 @@ class PostgresRepository:
                             "eligible": media.eligible,
                         },
                     )
+            for response in source_responses:
+                response_hash = sha256(response.payload).hexdigest()
+                stored_hash = connection.execute(
+                    text("""
+                        INSERT INTO data_governance.source_endpoint_responses
+                        (evidence_id, endpoint, payload_hash, payload_bytes, captured_at)
+                        VALUES (:evidence_id, :endpoint, :payload_hash, :payload_bytes, :captured_at)
+                        ON CONFLICT (evidence_id, endpoint) DO NOTHING
+                        RETURNING payload_hash
+                    """),
+                    {
+                        "evidence_id": evidence_id,
+                        "endpoint": response.endpoint,
+                        "payload_hash": response_hash,
+                        "payload_bytes": response.payload,
+                        "captured_at": response.captured_at,
+                    },
+                ).scalar_one_or_none()
+                if stored_hash is None:
+                    stored_hash = connection.execute(
+                        text("""
+                            SELECT payload_hash
+                            FROM data_governance.source_endpoint_responses
+                            WHERE evidence_id=:evidence_id AND endpoint=:endpoint
+                        """),
+                        {"evidence_id": evidence_id, "endpoint": response.endpoint},
+                    ).scalar_one()
+                if stored_hash.strip() != response_hash:
+                    raise ValueError("source_response_conflict")
+            for metric in record.source_metrics:
+                connection.execute(
+                    text("""
+                        INSERT INTO data_governance.source_metrics
+                        (evidence_id, metric_name, metric_value, endpoint, source,
+                         source_version, source_record_id, actor, captured_at)
+                        VALUES (:evidence_id, :metric_name, CAST(:metric_value AS jsonb),
+                                :endpoint, :source, :source_version, :source_record_id,
+                                :actor, :captured_at)
+                        ON CONFLICT (evidence_id, metric_name) DO NOTHING
+                    """),
+                    {
+                        "evidence_id": evidence_id,
+                        "metric_name": metric.name,
+                        "metric_value": json.dumps(metric.value),
+                        "endpoint": metric.endpoint,
+                        "source": manifest.source,
+                        "source_version": manifest.version,
+                        "source_record_id": record.record_id,
+                        "actor": manifest.actor,
+                        "captured_at": metric.captured_at,
+                    },
+                )
             for media in record.media:
                 payload = (media_bytes or {}).get(media.path)
                 if payload is not None and media.storage is Right.CONFIRMED:
@@ -576,8 +634,8 @@ class PostgresRepository:
                 ).mappings()
             ]
             missing: dict[str, int] = {}
-            for row in rows:
-                for field_name in row["optional_missing"]:
+            for record in rows:
+                for field_name in record["optional_missing"]:
                     missing[field_name] = missing.get(field_name, 0) + 1
             return {
                 **dict(run),

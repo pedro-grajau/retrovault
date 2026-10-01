@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     app_version: str = "dev"
     database_url: str = "postgresql+psycopg://postgres:retrovault-local@db:5432/retrovault"
     retroachievements_api_key: SecretStr = SecretStr("")
+    retroachievements_cache_dir: Path = PROJECT_ROOT / ".cache" / "retroachievements"
 
     @field_validator("app_version")
     @classmethod

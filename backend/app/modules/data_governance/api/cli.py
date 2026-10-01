@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     process_summary_parser.add_argument("--rule-version", default="editorial-v1")
     ra_ingest_parser = commands.add_parser("ra-ingest")
     ra_ingest_parser.add_argument("manifest", type=Path)
+    ra_catalog_parser = commands.add_parser("ra-snes-ingest")
+    ra_catalog_parser.add_argument("--page-size", type=int, default=100)
+    ra_catalog_parser.add_argument("--batch-size", type=int, default=1000)
+    ra_catalog_parser.add_argument("--refresh-cache", action="store_true")
     review_parser = commands.add_parser("review")
     review_parser.add_argument("run_id", type=UUID)
     review_parser.add_argument("record_id")
@@ -93,10 +98,50 @@ def main(argv: list[str] | None = None) -> int:
                 RetroAchievementsSource(
                     args.manifest,
                     settings.retroachievements_api_key.get_secret_value(),
+                    cache_dir=settings.retroachievements_cache_dir,
                 ),
                 repository,
                 settings.app_version,
             )
+        elif args.command == "ra-snes-ingest":
+            api_key = settings.retroachievements_api_key.get_secret_value()
+            if not api_key:
+                raise PackageError("retroachievements_key_unavailable")
+            source = RetroAchievementsSource(
+                None,
+                api_key,
+                cache_dir=settings.retroachievements_cache_dir,
+                refresh_cache=args.refresh_cache,
+            )
+            catalog = source.discover_console_games(3, page_size=args.page_size)
+            games = catalog.get("games")
+            if not isinstance(games, list):
+                raise PackageError("catalog_snapshot_invalid")
+            if not games:
+                raise PackageError("empty_game_catalog")
+            manifests = source.create_batch_manifests(
+                catalog, batch_size=args.batch_size
+            )
+            summaries: list[dict[str, object]] = []
+            for manifest in manifests:
+                batch_source = RetroAchievementsSource(
+                    manifest,
+                    api_key,
+                    cache_dir=settings.retroachievements_cache_dir,
+                    refresh_cache=args.refresh_cache,
+                    expected_console_id=3,
+                )
+                summaries.append(ingest(batch_source, repository, settings.app_version))
+            result = {
+                "source": "retroachievements",
+                "console_id": 3,
+                "filter": {"f": 1},
+                "catalog_version": catalog["version"],
+                "catalog_hash": catalog["catalog_hash"],
+                "game_count": len(games),
+                "batch_count": len(manifests),
+                "batches": summaries,
+            }
         elif args.command == "summary":
             summary = repository.summary(args.run_id)
             if summary is None:
@@ -106,12 +151,17 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "process":
             result = process_run(repository, args.run_id, args.rule_version)
         elif args.command == "process-summary":
-            result = repository.processing_summary(args.run_id, args.rule_version)
-            if result is None:
+            processing_summary = repository.processing_summary(
+                args.run_id, args.rule_version
+            )
+            if processing_summary is None:
                 sys.stdout.write(json.dumps({"code": "processing_not_found"}) + "\n")
                 return 1
+            result = processing_summary
         elif args.command == "review":
-            result = repository.review_candidate(args.run_id, args.record_id, args.rule_version)
+            result = repository.review_candidate(
+                args.run_id, args.record_id, args.rule_version
+            )
         elif args.command == "correct":
             try:
                 value = json.loads(args.value) if args.value_json else args.value
@@ -205,8 +255,15 @@ def main(argv: list[str] | None = None) -> int:
     except ReviewNotFound:
         sys.stdout.write(json.dumps({"code": "review_not_found"}) + "\n")
         return 1
-    except (PackageError, OSError):
-        sys.stdout.write(json.dumps({"code": "invalid_package"}) + "\n")
+    except (PackageError, OSError) as error:
+        message = str(error)
+        code = (
+            message
+            if isinstance(error, PackageError)
+            and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", message)
+            else "invalid_package"
+        )
+        sys.stdout.write(json.dumps({"code": code}) + "\n")
         return 2
     except ValueError:
         sys.stdout.write(json.dumps({"code": "invalid_request"}) + "\n")
