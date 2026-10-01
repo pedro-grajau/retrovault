@@ -11,7 +11,7 @@ class Offer:
     game_id: UUID
     mode: Literal["purchase", "rental"]
     price_minor: int
-    currency: str
+    currency: Literal["BRL"]
     condition_summary: str
     available_units: int
     demo_rank: int
