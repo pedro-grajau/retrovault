@@ -7,15 +7,53 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import create_engine
 
-from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepository
+from app.modules.catalog.application.discovery import (
+    Availability,
+    CommerceUnavailable,
+    PublicDiscovery,
+    SortOrder,
+)
 from app.modules.catalog.domain.publication import PublishedGame
-from app.platform.config.settings import settings
+from app.modules.catalog.ports.repository import PublishedCatalog
+from app.modules.commerce.domain.offers import Offer
+from app.modules.commerce.ports.offers import OfferReader
 
 router = APIRouter(prefix="/api/v1/catalog", tags=["catalog"])
-_engine = create_engine(settings.database_url, pool_pre_ping=True)
-_catalog = PostgresCatalogRepository(_engine)
+_catalog: PublishedCatalog | None = None
+_discovery: PublicDiscovery | None = None
+
+
+def configure_services(catalog: PublishedCatalog, commerce: OfferReader) -> None:
+    """Wire module ports from the application composition root."""
+    global _catalog, _discovery
+    _catalog = catalog
+    _discovery = PublicDiscovery(catalog, commerce)
+
+
+def _catalog_service() -> PublishedCatalog:
+    if _catalog is None:
+        raise RuntimeError("catalog_services_not_configured")
+    return _catalog
+
+
+def _discovery_service() -> PublicDiscovery:
+    if _discovery is None:
+        raise RuntimeError("catalog_services_not_configured")
+    return _discovery
+
+
+class OfferResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    mode: Literal["purchase", "rental"]
+    price_minor: int
+    currency: Literal["BRL"]
+    condition_summary: str
+    available_units: int
+    demo_rank: int
+    sandbox: bool
 
 
 class GameResponse(BaseModel):
@@ -32,6 +70,7 @@ class GameResponse(BaseModel):
     verified_at: str
     cover_attribution: str
     cover_url: str
+    offers: list[OfferResponse] | None = None
 
 
 class GameAttributes(BaseModel):
@@ -64,9 +103,17 @@ class AttributeOrigin(BaseModel):
 class GameListResponse(BaseModel):
     items: list[GameResponse]
     next_cursor: str | None
+    commerce_status: Literal["available", "unavailable"]
 
 
-def _game_response(game: PublishedGame) -> GameResponse:
+class GameFacetsResponse(BaseModel):
+    platforms: list[str]
+    genres: list[str]
+
+
+def _game_response(
+    game: PublishedGame, offers: list[Offer] | None = None
+) -> GameResponse:
     attributes = game.editorial.get("attributes", {})
     raw_lineage = game.editorial.get("lineage", {})
     public_origin_fields = {
@@ -96,22 +143,72 @@ def _game_response(game: PublishedGame) -> GameResponse:
         verified_at=game.verified_at.isoformat(),
         cover_attribution=game.cover_attribution,
         cover_url=f"/api/v1/catalog/games/{game.id}/box-art",
+        offers=(
+            [
+                OfferResponse(
+                    id=offer.id,
+                    mode=offer.mode,
+                    price_minor=offer.price_minor,
+                    currency=offer.currency,
+                    condition_summary=offer.condition_summary,
+                    available_units=offer.available_units,
+                    demo_rank=offer.demo_rank,
+                    sandbox=offer.sandbox,
+                )
+                for offer in offers
+            ]
+            if offers is not None
+            else None
+        ),
     )
 
 
-@router.get("/games", response_model=GameListResponse, response_model_exclude_none=True)
+@router.get("/facets", response_model=GameFacetsResponse)
+async def list_facets() -> GameFacetsResponse:
+    facets = _catalog_service().list_facets()
+    return GameFacetsResponse(**facets)
+
+
+@router.get(
+    "/games",
+    response_model=GameListResponse,
+    response_model_exclude_none=True,
+    responses={503: {"description": "Commerce indisponível."}},
+)
 async def list_games(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=1024),
     platform: str | None = Query(default=None, min_length=1, max_length=100),
+    genre: str | None = Query(default=None, min_length=1, max_length=100),
+    availability: Availability | None = Query(default=None),
+    sort: SortOrder = Query(default="catalog"),
 ) -> GameListResponse:
     try:
-        games, next_cursor = _catalog.list_games(
-            limit=limit, cursor=cursor, platform=platform
+        page = _discovery_service().list_games(
+            limit=limit,
+            cursor=cursor,
+            platform=platform,
+            genre=genre,
+            availability=availability,
+            sort=sort,
         )
+    except CommerceUnavailable as exc:
+        raise HTTPException(status_code=503, detail="commerce_unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid_cursor") from exc
-    return GameListResponse(items=[_game_response(game) for game in games], next_cursor=next_cursor)
+    return GameListResponse(
+        items=[
+            _game_response(
+                game,
+                page.offers_by_game.get(game.id, [])
+                if page.offers_by_game is not None
+                else None,
+            )
+            for game in page.games
+        ],
+        next_cursor=page.next_cursor,
+        commerce_status=page.commerce_status,
+    )
 
 
 @router.get(
@@ -140,7 +237,7 @@ async def get_game(
     response: Response,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> GameResponse | Response:
-    game = _catalog.get_game(game_id)
+    game = _catalog_service().get_game(game_id)
     if game is None:
         raise HTTPException(status_code=404, detail="not_found")
     etag = f'"{game.etag}"'
@@ -191,7 +288,7 @@ async def get_box_art(
     game_id: UUID,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
-    cover = _catalog.get_cover(game_id)
+    cover = _catalog_service().get_cover(game_id)
     if cover is None:
         raise HTTPException(status_code=404, detail="not_found")
     content, content_type, content_hash = cover

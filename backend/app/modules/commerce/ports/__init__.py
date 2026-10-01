@@ -1,1 +1,1 @@
-"""ports boundary; intentionally empty in Story 1.1."""
+"""Commerce application ports."""

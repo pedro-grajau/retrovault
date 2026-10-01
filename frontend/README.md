@@ -1,9 +1,9 @@
 # Frontend RetroVault
 
-O frontend é um shell React/Vite para o ambiente Sandbox da RetroVault. Ele
-exibe a versão informada pela API, mantém o banner de demonstração e não
-implementa catálogo, autenticação, checkout ou painel — essas capacidades
-pertencem às histórias seguintes.
+O frontend é uma experiência pública React/Vite para o ambiente Sandbox da
+RetroVault. Home e catálogo leem apenas jogos publicados e suas ofertas
+demonstrativas; busca direta, detalhe, autenticação, checkout e painel ficam
+para histórias seguintes.
 
 ## Desenvolvimento local
 

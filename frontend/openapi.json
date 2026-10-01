@@ -194,8 +194,40 @@
         "title": "GameAttributes",
         "type": "object"
       },
+      "GameFacetsResponse": {
+        "properties": {
+          "genres": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Genres",
+            "type": "array"
+          },
+          "platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Platforms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "platforms",
+          "genres"
+        ],
+        "title": "GameFacetsResponse",
+        "type": "object"
+      },
       "GameListResponse": {
         "properties": {
+          "commerce_status": {
+            "enum": [
+              "available",
+              "unavailable"
+            ],
+            "title": "Commerce Status",
+            "type": "string"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/GameResponse"
@@ -217,7 +249,8 @@
         },
         "required": [
           "items",
-          "next_cursor"
+          "next_cursor",
+          "commerce_status"
         ],
         "title": "GameListResponse",
         "type": "object"
@@ -240,6 +273,20 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "offers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OfferResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offers"
           },
           "origin_by_attribute": {
             "additionalProperties": {
@@ -300,6 +347,61 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "OfferResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "available_units": {
+            "title": "Available Units",
+            "type": "integer"
+          },
+          "condition_summary": {
+            "title": "Condition Summary",
+            "type": "string"
+          },
+          "currency": {
+            "const": "BRL",
+            "title": "Currency",
+            "type": "string"
+          },
+          "demo_rank": {
+            "title": "Demo Rank",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "purchase",
+              "rental"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "price_minor": {
+            "title": "Price Minor",
+            "type": "integer"
+          },
+          "sandbox": {
+            "title": "Sandbox",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "price_minor",
+          "currency",
+          "condition_summary",
+          "available_units",
+          "demo_rank",
+          "sandbox"
+        ],
+        "title": "OfferResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -369,6 +471,27 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/catalog/facets": {
+      "get": {
+        "operationId": "list_facets_api_v1_catalog_facets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameFacetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Facets",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
     "/api/v1/catalog/games": {
       "get": {
         "operationId": "list_games_api_v1_catalog_games_get",
@@ -419,6 +542,58 @@
               ],
               "title": "Platform"
             }
+          },
+          {
+            "in": "query",
+            "name": "genre",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Genre"
+            }
+          },
+          {
+            "in": "query",
+            "name": "availability",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "unavailable"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Availability"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "catalog",
+              "enum": [
+                "catalog",
+                "demo_popular"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -441,6 +616,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Commerce indispon\u00edvel."
           }
         },
         "summary": "List Games",

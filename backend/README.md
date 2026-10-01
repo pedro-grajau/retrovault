@@ -26,7 +26,21 @@ uv run fastapi dev
 
 Os modulos de dominio ficam em `app/modules/<modulo>/`, separados em `domain`, `application`, `ports`, `adapters` e `api`. Servicos compartilhados de plataforma ficam em `app/platform/`. Imports laterais de adapters e repositories entre modulos sao proibidos pelos testes arquiteturais.
 
-## Testes e verificacoes
+## Ofertas demonstrativas Sandbox
+
+O Compose executa `backend/scripts/seed-sandbox-commerce.py` depois das migrations.
+Ele cria ofertas sintéticas apenas para jogos já publicados, com preço, condição,
+modalidades e unidades marcados como Sandbox. Após publicar jogos com a API em
+execução, rode novamente o seed para acrescentar suas ofertas:
+
+```bash
+docker compose exec backend python scripts/seed-sandbox-commerce.py
+```
+
+O seed é idempotente e não altera ofertas já existentes. Esses valores não
+representam estoque nem preços reais.
+
+## Testes e verificações
 
 A partir de `backend/`:
 
@@ -43,7 +57,7 @@ Com a pilha Compose ativa, os testes tambem podem ser executados por:
 docker compose exec -T backend bash scripts/tests-start.sh
 ```
 
-O script `scripts/prestart.sh` aplica as migrations. Nao ha carga de usuarios, autenticacao ou dados iniciais nesta historia.
+O script `scripts/prestart.sh` aplica as migrations. Não há carga de usuários ou autenticação nesta história.
 
 ## Migrations
 

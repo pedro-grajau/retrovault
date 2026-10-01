@@ -16,7 +16,7 @@ services:
     environment:
       APP_VERSION: ${APP_VERSION:-dev}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-retrovault-local}@db:5432/${POSTGRES_DB:-retrovault}
-    command: ["sh", "-c", "alembic upgrade head && exec fastapi run --host 0.0.0.0"]
+    command: ["sh", "-c", "alembic upgrade head && python scripts/seed-sandbox-commerce.py && exec fastapi run --host 0.0.0.0"]
     ports: ["8000:8000"]
     depends_on:
       db: {condition: service_healthy}
