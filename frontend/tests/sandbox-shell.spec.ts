@@ -40,8 +40,10 @@ test("shell renderiza a versão real da API no Compose", async ({ page }) => {
   expect(apiResponse.ok()).toBe(true)
   const { app_version } = (await apiResponse.json()) as { app_version: string }
 
-  await expect(page.getByText(app_version, { exact: true })).toBeVisible()
-  await expect(page.getByText(`APP_VERSION ${app_version}`)).toBeVisible()
+  await expect(page.getByRole("contentinfo")).toContainText(app_version)
+  await expect(page.getByRole("contentinfo")).toContainText(
+    `APP_VERSION ${app_version}`,
+  )
 })
 
 test("shell does not overflow at 320 CSS px", async ({ page }) => {
