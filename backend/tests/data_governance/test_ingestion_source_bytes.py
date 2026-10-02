@@ -11,6 +11,8 @@ from app.modules.data_governance.domain.models import (
     PackageSnapshot,
     RecordReference,
     SnapshotRecord,
+    SourceMetric,
+    SourceResponse,
 )
 
 
@@ -42,7 +44,12 @@ class RecordingRepository:
         return {}
 
     def create_run(
-        self, run_id, manifest, package_hash, config_hash, app_version,
+        self,
+        run_id,
+        manifest,
+        package_hash,
+        config_hash,
+        app_version,
         manifest_hash=None,
     ):
         self.run_id = run_id
@@ -57,12 +64,15 @@ class RecordingRepository:
         media_bytes,
         *,
         source_payload=None,
+        source_responses=(),
     ):
         self.preserved = {
             "run_id": run_id,
             "raw_payload": record.raw_payload.encode(),
             "source_payload": source_payload,
             "payload_hash": payload_hash,
+            "source_responses": source_responses,
+            "source_metrics": record.source_metrics,
         }
 
     def fail(self, run_id, record_id, code, correlation_id):
@@ -73,6 +83,11 @@ class RecordingRepository:
 
     def summary(self, run_id):
         return {"id": run_id, "state": "completed"}
+
+
+class RejectionRecordingRepository(RecordingRepository):
+    def fail(self, run_id, record_id, code, correlation_id):
+        self.failure = (run_id, record_id, code, correlation_id)
 
 
 def test_ingest_hashes_and_persists_the_original_source_bytes() -> None:
@@ -110,7 +125,9 @@ def test_ingest_hashes_and_persists_the_original_source_bytes() -> None:
 
 
 def test_ingest_preserves_an_explicitly_empty_source_payload() -> None:
-    mapped_payload = b'{"id":"42","attributes":{"title":"Jogo","platform":"SNES"},"media":[]}'
+    mapped_payload = (
+        b'{"id":"42","attributes":{"title":"Jogo","platform":"SNES"},"media":[]}'
+    )
     manifest = Manifest(
         "retroachievements",
         "empty-source-v1",
@@ -131,6 +148,118 @@ def test_ingest_preserves_an_explicitly_empty_source_payload() -> None:
     assert repository.preserved is not None
     assert repository.preserved["source_payload"] == b""
     assert repository.preserved["payload_hash"] == sha256(b"").hexdigest()
+
+
+def test_ingest_uses_progression_capture_time_and_hashes_media_bytes() -> None:
+    captured_at = datetime(2026, 9, 30, 13, 14, tzinfo=UTC)
+    game_payload = b'{"ID":42,"Title":"Jogo","ConsoleID":3}'
+    progression_payload = b'{"ID":42,"NumDistinctPlayers":5}'
+    mapped_payload = (
+        b'{"id":"42","attributes":{"title":"Jogo","platform":"SNES"},'
+        b'"metrics":{"NumDistinctPlayers":5},"media":[]}'
+    )
+    manifest = Manifest(
+        "retroachievements",
+        "metrics-v1",
+        datetime(2026, 9, 30, tzinfo=UTC),
+        "Eduardo",
+        (RecordReference("42", "42.json"),),
+    )
+    snapshot = PackageSnapshot(
+        manifest,
+        "p" * 64,
+        (
+            SnapshotRecord(
+                payload=mapped_payload,
+                source_payload=game_payload,
+                media_bytes=(("/Images/cover.png", b"image-bytes"),),
+                source_responses=(
+                    SourceResponse("API_GetGame.php", game_payload, captured_at),
+                    SourceResponse(
+                        "API_GetGameProgression.php",
+                        progression_payload,
+                        captured_at,
+                    ),
+                ),
+            ),
+        ),
+        "c" * 64,
+    )
+    repository = RecordingRepository()
+
+    ingest(SourceWithSeparatePayloads(snapshot), repository, "test-version")
+
+    assert repository.preserved is not None
+    assert repository.preserved["payload_hash"] != sha256(game_payload).hexdigest()
+    assert repository.preserved["source_metrics"][0].captured_at == captured_at
+
+
+def test_local_package_cannot_inject_retroachievements_metrics() -> None:
+    mapped_payload = (
+        b'{"id":"42","attributes":{"title":"Jogo"},'
+        b'"metrics":{"NumDistinctPlayers":5},"media":[]}'
+    )
+    manifest = Manifest(
+        "local-test",
+        "injected-metric-v1",
+        datetime(2026, 9, 30, tzinfo=UTC),
+        "Eduardo",
+        (RecordReference("42", "42.json"),),
+    )
+    snapshot = PackageSnapshot(
+        manifest,
+        "p" * 64,
+        (SnapshotRecord(payload=mapped_payload),),
+        "c" * 64,
+    )
+    repository = RejectionRecordingRepository()
+
+    ingest(SourceWithSeparatePayloads(snapshot), repository, "test-version")
+
+    assert repository.preserved is None
+    assert repository.finished == (1, 0, 1)
+    assert repository.failure[1:3] == ("42", "record_rejected")
+
+
+def test_retroachievements_metrics_must_match_progression_response() -> None:
+    captured_at = datetime(2026, 9, 30, 13, 14, tzinfo=UTC)
+    game_payload = b'{"ID":42,"Title":"Jogo","ConsoleID":3}'
+    progression_payload = b'{"ID":42,"NumDistinctPlayers":7}'
+    mapped_payload = (
+        b'{"id":"42","attributes":{"title":"Jogo","platform":"SNES"},'
+        b'"metrics":{"NumDistinctPlayers":5},"media":[]}'
+    )
+    manifest = Manifest(
+        "retroachievements",
+        "mismatched-metric-v1",
+        captured_at,
+        "Eduardo",
+        (RecordReference("42", "42.json"),),
+    )
+    snapshot = PackageSnapshot(
+        manifest,
+        "p" * 64,
+        (
+            SnapshotRecord(
+                payload=mapped_payload,
+                source_payload=game_payload,
+                source_responses=(
+                    SourceResponse("API_GetGame.php", game_payload, captured_at),
+                    SourceResponse(
+                        "API_GetGameProgression.php", progression_payload, captured_at
+                    ),
+                ),
+            ),
+        ),
+        "c" * 64,
+    )
+    repository = RejectionRecordingRepository()
+
+    ingest(SourceWithSeparatePayloads(snapshot), repository, "test-version")
+
+    assert repository.preserved is None
+    assert repository.finished == (1, 0, 1)
+    assert repository.failure[1:3] == ("42", "record_rejected")
 
 
 class CachedSource:
@@ -198,12 +327,20 @@ class PreserveConnection:
     def __init__(self, evidence_id) -> None:
         self.evidence_id = evidence_id
         self.raw_evidence = None
+        self.endpoint_response = None
+        self.metric = None
 
     def execute(self, statement, parameters=None):
         normalized = " ".join(str(statement).split()).lower()
         if "insert into data_governance.raw_evidence" in normalized:
             self.raw_evidence = (normalized, dict(parameters or {}))
             return PreserveResult(self.evidence_id)
+        if "insert into data_governance.source_endpoint_responses" in normalized:
+            self.endpoint_response = (normalized, dict(parameters or {}))
+            return PreserveResult((parameters or {})["payload_hash"])
+        if "insert into data_governance.source_metrics" in normalized:
+            self.metric = (normalized, dict(parameters or {}))
+            return PreserveResult()
         return PreserveResult()
 
 
@@ -216,7 +353,7 @@ class PreserveEngine:
         yield self.connection
 
 
-def test_postgres_repository_binds_original_source_bytes_for_raw_evidence() -> None:
+def test_postgres_repository_binds_raw_source_responses_and_metrics() -> None:
     mapped_payload = '{"id":"42","attributes":{"title":"Título mapeado"},"media":[]}'
     source_payload = b'{"ID":42,"Title":"Original RA","ConsoleID":3}'
     evidence_id, run_id = uuid4(), uuid4()
@@ -229,15 +366,41 @@ def test_postgres_repository_binds_original_source_bytes_for_raw_evidence() -> N
     )
     engine = PreserveEngine(evidence_id)
     repository = PostgresRepository(engine)
+    source_response = SourceResponse(
+        "API_GetGameProgression.php",
+        b'{"ID":42,"NumDistinctPlayers":5}',
+        datetime(2026, 9, 30, tzinfo=UTC),
+    )
+    metric = SourceMetric(
+        "NumDistinctPlayers",
+        5,
+        "API_GetGameProgression.php",
+        datetime(2026, 9, 30, tzinfo=UTC),
+    )
 
     repository.preserve(
         run_id,
         evidence_id,
         manifest,
-        CatalogRecord("42", mapped_payload, (), ()),
+        CatalogRecord("42", mapped_payload, (), (), (metric,)),
         sha256(source_payload).hexdigest(),
         source_payload=source_payload,
+        source_responses=(source_response,),
     )
+
+    assert engine.connection.raw_evidence is not None
+    assert engine.connection.endpoint_response is not None
+    assert (
+        engine.connection.endpoint_response[1]["endpoint"]
+        == "API_GetGameProgression.php"
+    )
+    assert (
+        engine.connection.endpoint_response[1]["payload_bytes"]
+        == source_response.payload
+    )
+    assert engine.connection.metric is not None
+    assert engine.connection.metric[1]["metric_name"] == "NumDistinctPlayers"
+    assert engine.connection.metric[1]["metric_value"] == "5"
 
     assert engine.connection.raw_evidence is not None
     query, parameters = engine.connection.raw_evidence

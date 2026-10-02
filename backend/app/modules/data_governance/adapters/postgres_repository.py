@@ -1,6 +1,7 @@
 """Persistência privada com transação independente por registro."""
 
 import json
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -12,10 +13,16 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from PIL import Image
 from sqlalchemy import Connection, Engine, text
 
-from app.modules.data_governance.domain.models import CatalogRecord, Manifest, Right
+from app.modules.data_governance.domain.models import (
+    CatalogRecord,
+    Manifest,
+    Right,
+    SourceResponse,
+)
 from app.modules.data_governance.domain.normalization import (
     Candidate,
     candidate_from_evidence,
+    valid_image,
 )
 
 
@@ -38,6 +45,15 @@ EDITABLE_FIELDS = {
 }
 MAX_INCLUDED_ITEMS = 100
 MAX_CORRECTION_TEXT = 5000
+PRIVATE_USE_TERMS_REFERENCE = "https://retroachievements.org/terms"
+PRIVATE_USE_BASIS = (
+    "O responsável pelo projeto declarou que este é um portfólio particular e "
+    "invocou a exceção de reproduções individuais para uso privado indicada na "
+    "seção Copyrights dos termos da RetroAchievements. A publicação fica restrita "
+    "à instância local."
+)
+PRIVATE_USE_SCOPE = "loopback_only"
+PRIVATE_USE_ACTOR = "Eduardo"
 
 
 class PostgresRepository:
@@ -100,6 +116,166 @@ class PostgresRepository:
             result.update(dict.fromkeys(failures, "rejected"))
             return result
 
+    def catalog_run_ids(
+        self,
+        catalog_version: str,
+        *,
+        expected_game_count: int,
+        expected_batch_count: int,
+        batch_size: int | None = None,
+    ) -> list[UUID]:
+        """Return the completed batch runs belonging to one SNES catalog version."""
+        if (
+            type(expected_game_count) is not int
+            or expected_game_count <= 0
+            or type(expected_batch_count) is not int
+            or expected_batch_count <= 0
+            or (
+                batch_size is not None
+                and (type(batch_size) is not int or batch_size <= 0)
+            )
+        ):
+            raise ValueError("catalog_batch_expectations_invalid")
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text("""
+                    SELECT id, state, source_version, received, preserved, rejected
+                    FROM data_governance.ingest_runs
+                    WHERE source='retroachievements'
+                      AND left(source_version, length(:prefix))=:prefix
+                      AND substring(source_version from length(:prefix) + 1)
+                          ~ '^-n[1-9][0-9]*-b[0-9]+$'
+                    ORDER BY source_version
+                """),
+                {"prefix": catalog_version},
+            ).mappings().all()
+        if not rows:
+            raise ValueError("catalog_run_not_found")
+
+        groups: dict[int, list[tuple[int, dict[str, object]]]] = {}
+        suffix_pattern = re.compile(r"-n([1-9][0-9]*)-b([0-9]+)")
+        for row in rows:
+            suffix = str(row["source_version"])[len(catalog_version) :]
+            match = suffix_pattern.fullmatch(suffix)
+            if match is None:
+                raise ValueError("catalog_run_invalid")
+            size = int(match.group(1))
+            if batch_size is None or size == batch_size:
+                groups.setdefault(size, []).append((int(match.group(2)), dict(row)))
+
+        complete: list[list[tuple[int, dict[str, object]]]] = []
+        for group in groups.values():
+            indexes = sorted(index for index, _ in group)
+            if (
+                len(group) == expected_batch_count
+                and indexes == list(range(1, expected_batch_count + 1))
+                and all(row["state"] == "completed" for _, row in group)
+                and sum(cast(int, row["received"]) for _, row in group) == expected_game_count
+                and sum(cast(int, row["preserved"]) for _, row in group) == expected_game_count
+                and sum(cast(int, row["rejected"]) for _, row in group) == 0
+            ):
+                complete.append(group)
+        if len(complete) > 1:
+            raise ValueError("catalog_batch_size_ambiguous")
+        if not complete:
+            if batch_size is not None and batch_size not in groups:
+                raise ValueError("catalog_run_not_found")
+            raise ValueError("catalog_run_incomplete")
+        selected = complete[0]
+        return [UUID(str(row["id"])) for _, row in sorted(selected)]
+
+    def record_private_use_for_catalog(
+        self,
+        catalog_version: str,
+        *,
+        expected_game_count: int,
+        expected_batch_count: int,
+        batch_size: int | None = None,
+    ) -> dict[str, int]:
+        """Append a user-declared, loopback-only use decision for valid SNES covers."""
+        run_ids = self.catalog_run_ids(
+            catalog_version,
+            expected_game_count=expected_game_count,
+            expected_batch_count=expected_batch_count,
+            batch_size=batch_size,
+        )
+        with self.engine.begin() as connection:
+            created = 0
+            existing = 0
+            eligible = 0
+            seen: set[tuple[UUID, str]] = set()
+            for run_id in run_ids:
+                rows = connection.execute(
+                    text("""
+                        SELECT e.id AS evidence_id, e.raw_payload,
+                               mr.media_path, mr.role, mr.storage_right,
+                               mr.attribution, pm.content
+                        FROM data_governance.run_evidence re
+                        JOIN data_governance.raw_evidence e ON e.id=re.evidence_id
+                        JOIN data_governance.media_rights mr ON mr.evidence_id=e.id
+                        LEFT JOIN data_governance.private_media pm
+                          ON pm.run_id=re.run_id AND pm.evidence_id=e.id
+                         AND pm.media_path=mr.media_path
+                        WHERE re.run_id=:run_id
+                          AND e.source='retroachievements'
+                          AND mr.role='box_art'
+                        ORDER BY e.id, mr.media_path, (pm.content IS NOT NULL) DESC
+                    """),
+                    {"run_id": run_id},
+                ).mappings().all()
+                for row in rows:
+                    evidence_key = (UUID(str(row["evidence_id"])), str(row["media_path"]))
+                    if evidence_key in seen:
+                        continue
+                    seen.add(evidence_key)
+                    try:
+                        attributes = json.loads(row["raw_payload"]).get("attributes", {})
+                    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                        raise ValueError("catalog_evidence_invalid") from exc
+                    if not isinstance(attributes, dict) or attributes.get("platform") != "SNES":
+                        raise ValueError("catalog_not_snes")
+                    content = bytes(row["content"]) if row["content"] is not None else None
+                    if (
+                        row["storage_right"] != "confirmed"
+                        or not isinstance(row["attribution"], str)
+                        or not row["attribution"].strip()
+                        or not valid_image(content)
+                    ):
+                        continue
+                    eligible += 1
+                    inserted = connection.execute(
+                        text("""
+                            INSERT INTO data_governance.private_use_cover_decisions
+                            (id, evidence_id, media_path, scope, basis, terms_reference,
+                             actor, decided_at)
+                            VALUES (:id, :evidence_id, :media_path, :scope, :basis,
+                                    :terms_reference, :actor, :decided_at)
+                            ON CONFLICT DO NOTHING
+                            RETURNING id
+                        """),
+                        {
+                            "id": uuid4(),
+                            "evidence_id": row["evidence_id"],
+                            "media_path": row["media_path"],
+                            "scope": PRIVATE_USE_SCOPE,
+                            "basis": PRIVATE_USE_BASIS,
+                            "terms_reference": PRIVATE_USE_TERMS_REFERENCE,
+                            "actor": PRIVATE_USE_ACTOR,
+                            "decided_at": datetime.now(UTC),
+                        },
+                    ).scalar_one_or_none()
+                    if inserted is None:
+                        existing += 1
+                    else:
+                        created += 1
+        if eligible == 0:
+            raise ValueError("catalog_has_no_valid_covers")
+        return {
+            "eligible_covers": eligible,
+            "decisions_created": created,
+            "decisions_existing": existing,
+        }
+
     def create_run(
         self,
         run_id: UUID,
@@ -140,6 +316,7 @@ class PostgresRepository:
         media_bytes: dict[str, bytes | None] | None = None,
         *,
         source_payload: bytes | None = None,
+        source_responses: tuple[SourceResponse, ...] = (),
     ) -> None:
         with self.engine.begin() as connection:
             inserted = connection.execute(
@@ -219,6 +396,58 @@ class PostgresRepository:
                             "eligible": media.eligible,
                         },
                     )
+            for response in source_responses:
+                response_hash = sha256(response.payload).hexdigest()
+                stored_hash = connection.execute(
+                    text("""
+                        INSERT INTO data_governance.source_endpoint_responses
+                        (evidence_id, endpoint, payload_hash, payload_bytes, captured_at)
+                        VALUES (:evidence_id, :endpoint, :payload_hash, :payload_bytes, :captured_at)
+                        ON CONFLICT (evidence_id, endpoint) DO NOTHING
+                        RETURNING payload_hash
+                    """),
+                    {
+                        "evidence_id": evidence_id,
+                        "endpoint": response.endpoint,
+                        "payload_hash": response_hash,
+                        "payload_bytes": response.payload,
+                        "captured_at": response.captured_at,
+                    },
+                ).scalar_one_or_none()
+                if stored_hash is None:
+                    stored_hash = connection.execute(
+                        text("""
+                            SELECT payload_hash
+                            FROM data_governance.source_endpoint_responses
+                            WHERE evidence_id=:evidence_id AND endpoint=:endpoint
+                        """),
+                        {"evidence_id": evidence_id, "endpoint": response.endpoint},
+                    ).scalar_one()
+                if stored_hash.strip() != response_hash:
+                    raise ValueError("source_response_conflict")
+            for metric in record.source_metrics:
+                connection.execute(
+                    text("""
+                        INSERT INTO data_governance.source_metrics
+                        (evidence_id, metric_name, metric_value, endpoint, source,
+                         source_version, source_record_id, actor, captured_at)
+                        VALUES (:evidence_id, :metric_name, CAST(:metric_value AS jsonb),
+                                :endpoint, :source, :source_version, :source_record_id,
+                                :actor, :captured_at)
+                        ON CONFLICT (evidence_id, metric_name) DO NOTHING
+                    """),
+                    {
+                        "evidence_id": evidence_id,
+                        "metric_name": metric.name,
+                        "metric_value": json.dumps(metric.value),
+                        "endpoint": metric.endpoint,
+                        "source": manifest.source,
+                        "source_version": manifest.version,
+                        "source_record_id": record.record_id,
+                        "actor": manifest.actor,
+                        "captured_at": metric.captured_at,
+                    },
+                )
             for media in record.media:
                 payload = (media_bytes or {}).get(media.path)
                 if payload is not None and media.storage is Right.CONFIRMED:
@@ -353,12 +582,24 @@ class PostgresRepository:
                     dict(item)
                     for item in connection.execute(
                         text("""
-                    SELECT mr.media_path, mr.role, mr.storage_right, mr.publication_right,
+                    SELECT mr.media_path, mr.role, mr.storage_right,
+                       CASE WHEN pud.scope='loopback_only' THEN 'confirmed'
+                            ELSE mr.publication_right END AS publication_right,
+                           mr.publication_right AS source_publication_right,
                            mr.attribution, pm.content IS NOT NULL AS content_available,
-                           pm.content
+                           pm.content, pud.id AS rights_decision_id,
+                           pud.scope AS rights_scope, pud.basis AS rights_basis,
+                           pud.terms_reference, pud.actor AS rights_actor,
+                           pud.decided_at AS rights_decided_at
                     FROM data_governance.media_rights mr
                     LEFT JOIN data_governance.private_media pm
                       ON pm.run_id=:run_id AND pm.evidence_id=mr.evidence_id AND pm.media_path=mr.media_path
+                    LEFT JOIN LATERAL (
+                      SELECT id, scope, basis, terms_reference, actor, decided_at
+                      FROM data_governance.private_use_cover_decisions
+                      WHERE evidence_id=mr.evidence_id AND media_path=mr.media_path
+                      ORDER BY decided_at DESC, id DESC LIMIT 1
+                    ) pud ON true
                     WHERE mr.evidence_id=:evidence_id
                 """),
                         {"run_id": run_id, "evidence_id": row["id"]},
@@ -576,8 +817,8 @@ class PostgresRepository:
                 ).mappings()
             ]
             missing: dict[str, int] = {}
-            for row in rows:
-                for field_name in row["optional_missing"]:
+            for record in rows:
+                for field_name in record["optional_missing"]:
                     missing[field_name] = missing.get(field_name, 0) + 1
             return {
                 **dict(run),
@@ -631,6 +872,7 @@ class PostgresRepository:
         evidence_id: UUID,
         values: dict[str, Any],
         correction_ids: list[str],
+        rights_decision_ids: list[str] | None = None,
     ) -> str:
         body = json.dumps(
             {
@@ -639,6 +881,7 @@ class PostgresRepository:
                 "evidence_id": str(evidence_id),
                 "values": values,
                 "corrections": correction_ids,
+                "rights_decisions": sorted(rights_decision_ids or []),
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -696,20 +939,43 @@ class PostgresRepository:
         for correction in corrections:
             values[correction["field"]] = correction["value"]
         correction_ids = [str(item["id"]) for item in corrections]
-        etag = self._review_etag(run_id, rule_version, evidence_id, values, correction_ids)
         media_rows = list(connection.execute(
             text("""
-                SELECT mr.media_path, mr.role, mr.storage_right, mr.publication_right,
-                       mr.attribution, mr.eligible, pm.content_hash, pm.content
+                SELECT mr.media_path, mr.role, mr.storage_right,
+                       CASE WHEN pud.scope='loopback_only' THEN 'confirmed'
+                            ELSE mr.publication_right END AS publication_right,
+                       mr.publication_right AS source_publication_right,
+                       mr.attribution,
+                       CASE WHEN pud.scope='loopback_only' THEN true
+                            ELSE mr.eligible END AS eligible,
+                       pm.content_hash, pm.content,
+                       pud.id AS rights_decision_id, pud.scope AS rights_scope,
+                       pud.basis AS rights_basis, pud.terms_reference,
+                       pud.actor AS rights_actor, pud.decided_at AS rights_decided_at
                 FROM data_governance.media_rights mr
                 LEFT JOIN data_governance.private_media pm
                   ON pm.run_id=:run_id AND pm.evidence_id=mr.evidence_id
                  AND pm.media_path=mr.media_path
+                LEFT JOIN LATERAL (
+                  SELECT id, scope, basis, terms_reference, actor, decided_at
+                  FROM data_governance.private_use_cover_decisions
+                  WHERE evidence_id=mr.evidence_id AND media_path=mr.media_path
+                  ORDER BY decided_at DESC, id DESC LIMIT 1
+                ) pud ON true
                 WHERE mr.evidence_id=:evidence_id
                 ORDER BY mr.media_path
             """),
             {"run_id": run_id, "evidence_id": evidence_id},
         ).mappings())
+        rights_decision_ids = sorted(
+            str(item["rights_decision_id"])
+            for item in media_rows
+            if item["rights_decision_id"] is not None
+        )
+        etag = self._review_etag(
+            run_id, rule_version, evidence_id, values, correction_ids,
+            rights_decision_ids,
+        )
         media = []
         validation_media = []
         for item in media_rows:
@@ -719,11 +985,26 @@ class PostgresRepository:
                 "role": item["role"],
                 "storage_right": item["storage_right"],
                 "publication_right": item["publication_right"],
+                "source_publication_right": item["source_publication_right"],
                 "attribution": item["attribution"],
                 "eligible": item["eligible"],
                 "content_hash": item["content_hash"],
                 "content_available": item["content"] is not None,
+                "rights_decision_id": (
+                    str(item["rights_decision_id"])
+                    if item["rights_decision_id"] is not None else None
+                ),
+                "rights_scope": item["rights_scope"],
             }
+            if item["rights_decision_id"] is not None:
+                current["rights_decision"] = {
+                    "id": str(item["rights_decision_id"]),
+                    "scope": item["rights_scope"],
+                    "basis": item["rights_basis"],
+                    "terms_reference": item["terms_reference"],
+                    "actor": item["rights_actor"],
+                    "decided_at": item["rights_decided_at"],
+                }
             if include_private_media and content is not None:
                 current["content"] = content
             media.append(current)
@@ -731,6 +1012,7 @@ class PostgresRepository:
                 "role": item["role"],
                 "storage_right": item["storage_right"],
                 "publication_right": item["publication_right"],
+                "source_publication_right": item["source_publication_right"],
                 "attribution": item["attribution"],
                 "content_available": content is not None,
                 "content": content,
@@ -821,6 +1103,16 @@ class PostgresRepository:
                     continue
                 mime_types = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
                 if image_format in mime_types:
+                    rights_reference = None
+                    if metadata.get("rights_scope") == PRIVATE_USE_SCOPE:
+                        rights_reference = (
+                            "Uso privado declarado pelo responsável do projeto para "
+                            "portfólio particular; fundamento invocado: RetroAchievements "
+                            "Terms, Copyrights, "
+                            f"{metadata.get('terms_reference')}; escopo: instância local "
+                            "servida somente em 127.0.0.1. Fonte da capa: "
+                            f"{attribution}."
+                        )
                     cover = {
                         "path": metadata["path"],
                         "content": content if include_private_media else None,
@@ -828,7 +1120,14 @@ class PostgresRepository:
                         "content_hash": metadata["content_hash"],
                         "storage_right": metadata["storage_right"],
                         "publication_right": metadata["publication_right"],
+                        "source_publication_right": metadata["source_publication_right"],
+                        "rights_scope": metadata.get("rights_scope"),
                         "attribution": metadata["attribution"],
+                        "rights_reference": rights_reference,
+                        "rights_decision_id": (
+                            str(metadata["rights_decision_id"])
+                            if metadata["rights_decision_id"] is not None else None
+                        ),
                     }
                     break
         return {
@@ -845,6 +1144,7 @@ class PostgresRepository:
             "values": values,
             "media": media,
             "cover": cover,
+            "rights_decision_ids": rights_decision_ids,
             "lineage": origins,
             "corrections": [dict(item) for item in corrections],
             "etag": etag,
@@ -975,7 +1275,10 @@ class PostgresRepository:
             updated_values[field] = value
             corrections = cast(list[dict[str, Any]], current_corrections)
             correction_ids = [str(item["id"]) for item in corrections] + [str(correction_id)]
-            resulting_etag = self._review_etag(run_id, rule_version, evidence_id, updated_values, correction_ids)
+            resulting_etag = self._review_etag(
+                run_id, rule_version, evidence_id, updated_values, correction_ids,
+                cast(list[str], current["rights_decision_ids"]),
+            )
             connection.execute(
                 text("""
                     INSERT INTO data_governance.review_corrections

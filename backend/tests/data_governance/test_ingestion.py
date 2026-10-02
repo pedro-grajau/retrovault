@@ -1,6 +1,7 @@
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
@@ -24,7 +25,13 @@ from app.modules.data_governance.application.ingest import (
     parse_record,
 )
 from app.modules.data_governance.application.process import process_run
-from app.modules.data_governance.domain.models import PackageSnapshot
+from app.modules.data_governance.domain.models import (
+    Manifest,
+    PackageSnapshot,
+    RecordReference,
+    SnapshotRecord,
+    SourceResponse,
+)
 from app.platform.config.settings import settings
 
 
@@ -93,6 +100,104 @@ def test_incomplete_editorial_record_remains_raw_evidence() -> None:
     assert media_without_rights.media[0].publication.value == "unknown"
 
 
+@pytest.mark.skipif(
+    os.getenv("RUN_DB_TESTS") != "1",
+    reason="PostgreSQL efêmero do compose não está ativo",
+)
+def test_postgres_stores_immutable_retroachievements_responses_and_metrics() -> None:
+    captured_at = datetime.fromisoformat("2026-09-30T13:14:00+00:00")
+    source_version = f"ra-postgres-{uuid4().hex}"
+    game_payload = b'{"ID":42,"Title":"Jogo RA","ConsoleID":3}'
+    progression_payload = b'{"ID":42,"NumDistinctPlayers":5}'
+    mapped_payload = (
+        b'{"id":"42","attributes":{"title":"Jogo RA","platform":"SNES"},'
+        b'"metrics":{"NumDistinctPlayers":5},"media":[]}'
+    )
+    manifest = Manifest(
+        "retroachievements",
+        source_version,
+        captured_at,
+        "Eduardo",
+        (RecordReference("42", "42.json"),),
+    )
+    snapshot = PackageSnapshot(
+        manifest,
+        "p" * 64,
+        (
+            SnapshotRecord(
+                payload=mapped_payload,
+                source_payload=game_payload,
+                source_responses=(
+                    SourceResponse("API_GetGame.php", game_payload, captured_at),
+                    SourceResponse(
+                        "API_GetGameProgression.php", progression_payload, captured_at
+                    ),
+                ),
+            ),
+        ),
+        "c" * 64,
+    )
+
+    class SnapshotSource:
+        max_record_bytes = 10_000
+
+        def snapshot(self):
+            return snapshot
+
+    engine = create_engine(settings.database_url)
+    try:
+        result = ingest(SnapshotSource(), PostgresRepository(engine), "test-version")
+        assert result["state"] == "completed"
+        with engine.connect() as connection:
+            evidence_id = connection.execute(
+                text("""
+                    SELECT e.id FROM data_governance.raw_evidence e
+                    JOIN data_governance.run_evidence re ON re.evidence_id=e.id
+                    WHERE re.run_id=:run_id
+                """),
+                {"run_id": result["id"]},
+            ).scalar_one()
+            responses = connection.execute(
+                text("""
+                    SELECT endpoint, payload_hash, payload_bytes
+                    FROM data_governance.source_endpoint_responses
+                    WHERE evidence_id=:evidence_id ORDER BY endpoint
+                """),
+                {"evidence_id": evidence_id},
+            ).all()
+            metric = connection.execute(
+                text("""
+                    SELECT metric_name, metric_value::text, endpoint, source
+                    FROM data_governance.source_metrics WHERE evidence_id=:evidence_id
+                """),
+                {"evidence_id": evidence_id},
+            ).one()
+        assert [(row.endpoint, row.payload_bytes) for row in responses] == [
+            ("API_GetGame.php", game_payload),
+            ("API_GetGameProgression.php", progression_payload),
+        ]
+        assert [row.payload_hash.strip() for row in responses] == [
+            sha256(game_payload).hexdigest(),
+            sha256(progression_payload).hexdigest(),
+        ]
+        assert metric == (
+            "NumDistinctPlayers",
+            "5",
+            "API_GetGameProgression.php",
+            "retroachievements",
+        )
+        with pytest.raises(DBAPIError), engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE data_governance.source_endpoint_responses
+                    SET endpoint=endpoint WHERE evidence_id=:evidence_id
+                """),
+                {"evidence_id": evidence_id},
+            )
+    finally:
+        engine.dispose()
+
+
 def test_versioned_fixture_is_local_and_deterministic() -> None:
     root = Path(__file__).parents[3] / "fixtures" / "catalog"
     package = LocalPackage(root)
@@ -100,6 +205,128 @@ def test_versioned_fixture_is_local_and_deterministic() -> None:
     assert snapshot.manifest.actor == "Eduardo"
     assert snapshot.package_hash == package.snapshot().package_hash
     assert len(snapshot.records) == 2
+
+
+def test_ra_snes_cli_ingests_every_batch_and_returns_all_summaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from types import SimpleNamespace
+
+    import app.modules.data_governance.api.cli as cli
+
+    summaries: list[dict[str, object]] = []
+    sources: list[object] = []
+    catalog_versions: list[str] = []
+    manifests = [tmp_path / "batch-1.json", tmp_path / "batch-2.json"]
+
+    class FakeSource:
+        def __init__(self, manifest, api_key, **kwargs):
+            self.manifest = manifest
+            self.api_key = api_key
+            self.kwargs = kwargs
+
+        def discover_console_games(self, console_id, *, page_size):
+            assert console_id == 3
+            assert page_size == 17
+            return {
+                "version": "console-3-catalog",
+                "catalog_hash": "c" * 64,
+                "games": [{"ID": 1}, {"ID": 2}, {"ID": 3}],
+            }
+
+        def create_batch_manifests(self, catalog, *, batch_size):
+            assert batch_size == 2
+            catalog_versions.append(catalog["version"])
+            return manifests
+
+    def fake_ingest(source, _repository, _app_version):
+        sources.append(source)
+        summary = {"id": f"run-{len(sources)}", "state": "completed"}
+        summaries.append(summary)
+        return summary
+
+    monkeypatch.setattr(cli, "create_engine", lambda _url: object())
+    monkeypatch.setattr(cli, "PostgresRepository", lambda _engine: object())
+    monkeypatch.setattr(cli, "RetroAchievementsSource", FakeSource)
+    monkeypatch.setattr(cli, "ingest", fake_ingest)
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        SimpleNamespace(
+            database_url="postgresql://fixture",
+            app_version="test-version",
+            retroachievements_api_key=SimpleNamespace(
+                get_secret_value=lambda: "secret"
+            ),
+            retroachievements_cache_dir=tmp_path / "cache",
+        ),
+    )
+
+    assert cli.main(
+        [
+            "ra-snes-ingest",
+            "--page-size",
+            "17",
+            "--batch-size",
+            "2",
+            "--attempt",
+            "retry1",
+        ]
+    ) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["game_count"] == 3
+    assert result["batch_count"] == 2
+    assert result["catalog_version"] == "console-3-catalog-attempt-retry1"
+    assert result["batches"] == summaries
+    assert catalog_versions == ["console-3-catalog-attempt-retry1"]
+    assert len(sources) == 2
+    assert [source.manifest for source in sources] == manifests
+    assert all(source.kwargs["expected_console_id"] == 3 for source in sources)
+    assert cli.main(
+        ["ra-snes-ingest", "--attempt", "../outside-cache"]
+    ) == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "code": "catalog_attempt_invalid"
+    }
+    assert len(sources) == 2
+
+
+def test_ra_snes_cli_rejects_empty_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from types import SimpleNamespace
+
+    import app.modules.data_governance.api.cli as cli
+
+    class EmptySource:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def discover_console_games(self, *_args, **_kwargs):
+            return {"version": "console-3-empty", "catalog_hash": "x", "games": []}
+
+        def create_batch_manifests(self, *_args, **_kwargs):
+            raise AssertionError("catálogo vazio não deve criar lotes")
+
+    monkeypatch.setattr(cli, "create_engine", lambda _url: object())
+    monkeypatch.setattr(cli, "PostgresRepository", lambda _engine: object())
+    monkeypatch.setattr(cli, "RetroAchievementsSource", EmptySource)
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        SimpleNamespace(
+            database_url="postgresql://fixture",
+            app_version="test-version",
+            retroachievements_api_key=SimpleNamespace(
+                get_secret_value=lambda: "secret"
+            ),
+            retroachievements_cache_dir=tmp_path / "cache",
+        ),
+    )
+
+    assert cli.main(["ra-snes-ingest"]) == 2
+    assert json.loads(capsys.readouterr().out) == {"code": "empty_game_catalog"}
 
 
 def test_manifest_accepts_lowercase_rfc3339_separators_and_normalizes_utc(
@@ -163,7 +390,9 @@ def test_snapshot_rejects_parent_replaced_with_symlink_before_open(
         source.snapshot()
 
 
-def test_package_rejects_escaping_symlink_and_isolates_unreadable_record(tmp_path: Path) -> None:
+def test_package_rejects_escaping_symlink_and_isolates_unreadable_record(
+    tmp_path: Path,
+) -> None:
     package = tmp_path / "package"
     _package(package, "local-test", "1")
     outside = tmp_path / "outside.json"
@@ -248,7 +477,9 @@ def test_manifest_rejects_extra_and_duplicate_keys(tmp_path: Path) -> None:
     _package(package, "local-test", "1")
     manifest_path = package / "manifest.json"
     original = manifest_path.read_text()
-    manifest_path.write_text(original.replace('"actor": "Eduardo"', '"actor": "Eduardo", "extra": 1'))
+    manifest_path.write_text(
+        original.replace('"actor": "Eduardo"', '"actor": "Eduardo", "extra": 1')
+    )
     from app.modules.data_governance.ports.source import PackageError
 
     with pytest.raises(PackageError):
@@ -306,7 +537,7 @@ def test_manifest_rejects_invalid_actor_and_file_before_opening_references(
     from app.modules.data_governance.api.cli import main
 
     assert main(["ingest", str(package)]) == 2
-    assert json.loads(capsys.readouterr().out) == {"code": "invalid_package"}
+    assert json.loads(capsys.readouterr().out) == {"code": "invalid_manifest"}
 
 
 @pytest.mark.skipif(
@@ -380,13 +611,17 @@ def test_persistence_idempotency_lineage_rights_conflict_and_partial_failure(
     with pytest.raises(DBAPIError):
         with engine.begin() as connection:
             connection.execute(
-                text("UPDATE data_governance.raw_evidence SET raw_payload='altered' WHERE id=:id"),
+                text(
+                    "UPDATE data_governance.raw_evidence SET raw_payload='altered' WHERE id=:id"
+                ),
                 {"id": evidence["id"]},
             )
     with pytest.raises(DBAPIError):
         with engine.begin() as connection:
             connection.execute(
-                text("DELETE FROM data_governance.attribute_origins WHERE evidence_id=:id"),
+                text(
+                    "DELETE FROM data_governance.attribute_origins WHERE evidence_id=:id"
+                ),
                 {"id": evidence["id"]},
             )
     for mutation in (
@@ -438,14 +673,17 @@ def test_persistence_idempotency_lineage_rights_conflict_and_partial_failure(
             {"id": evidence["id"]},
         ).scalar_one()
         assert json.loads(old)["attributes"]["title"] == "Jogo sintético"
-        assert connection.execute(
-            text("""
+        assert (
+            connection.execute(
+                text("""
                 SELECT mr.eligible FROM data_governance.media_rights mr
                 JOIN data_governance.run_evidence re ON re.evidence_id = mr.evidence_id
                 WHERE re.run_id = :id
             """),
-            {"id": second["id"]},
-        ).scalar_one() is True
+                {"id": second["id"]},
+            ).scalar_one()
+            is True
+        )
     engine.dispose()
 
 
@@ -463,25 +701,61 @@ def test_running_execution_resumes_without_duplicate_evidence_or_failures(
     engine = create_engine(settings.database_url)
     repository = PostgresRepository(engine)
     run_id = uuid5(NAMESPACE_URL, f"retrovault:ingest:{source_name}:1")
-    repository.create_run(run_id, snapshot.manifest, snapshot.package_hash, "0" * 64, "test-version")
+    repository.create_run(
+        run_id, snapshot.manifest, snapshot.package_hash, "0" * 64, "test-version"
+    )
     payload = snapshot.records[0].payload
     assert payload is not None
     payload_hash = sha256(payload).hexdigest()
-    evidence_id = uuid5(NAMESPACE_URL, f"retrovault:evidence:{source_name}:game:{payload_hash}")
-    repository.preserve(run_id, evidence_id, snapshot.manifest, parse_record("game", payload.decode()), payload_hash)
+    evidence_id = uuid5(
+        NAMESPACE_URL, f"retrovault:evidence:{source_name}:game:{payload_hash}"
+    )
+    repository.preserve(
+        run_id,
+        evidence_id,
+        snapshot.manifest,
+        parse_record("game", payload.decode()),
+        payload_hash,
+    )
     repository.fail(run_id, "bad", "record_rejected", uuid4())
     running = repository.summary(run_id)
     assert running is not None
-    assert (running["received"], running["preserved"], running["rejected"], running["pending"]) == (2, 1, 1, 1)
+    assert (
+        running["received"],
+        running["preserved"],
+        running["rejected"],
+        running["pending"],
+    ) == (2, 1, 1, 1)
 
     resumed = ingest(LocalPackage(package), repository, "changed-version")
     assert resumed["id"] == run_id
     assert resumed["app_version"] == "test-version"
-    assert (resumed["received"], resumed["preserved"], resumed["rejected"], resumed["pending"]) == (2, 1, 1, 1)
+    assert (
+        resumed["received"],
+        resumed["preserved"],
+        resumed["rejected"],
+        resumed["pending"],
+    ) == (2, 1, 1, 1)
     assert resumed["state"] == "completed"
     with engine.connect() as connection:
-        assert connection.execute(text("SELECT count(*) FROM data_governance.run_evidence WHERE run_id=:id"), {"id": run_id}).scalar_one() == 1
-        assert connection.execute(text("SELECT count(*) FROM data_governance.ingest_failures WHERE run_id=:id"), {"id": run_id}).scalar_one() == 1
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM data_governance.run_evidence WHERE run_id=:id"
+                ),
+                {"id": run_id},
+            ).scalar_one()
+            == 1
+        )
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM data_governance.ingest_failures WHERE run_id=:id"
+                ),
+                {"id": run_id},
+            ).scalar_one()
+            == 1
+        )
     engine.dispose()
 
 
@@ -508,13 +782,16 @@ def test_evidence_uses_the_exact_bytes_in_package_fingerprint(tmp_path: Path) ->
     repository = PostgresRepository(engine)
     result = ingest(MutatingSource(), repository, "test-version")
     with engine.connect() as connection:
-        row = connection.execute(text("""
+        row = connection.execute(
+            text("""
             SELECT r.package_hash, e.raw_payload, e.payload_hash
             FROM data_governance.ingest_runs r
             JOIN data_governance.run_evidence re ON re.run_id=r.id
             JOIN data_governance.raw_evidence e ON e.id=re.evidence_id
             WHERE r.id=:id
-        """), {"id": result["id"]}).one()
+        """),
+            {"id": result["id"]},
+        ).one()
     assert json.loads(row.raw_payload)["attributes"]["title"] == "Jogo sintético"
     assert row.payload_hash == sha256(row.raw_payload.encode()).hexdigest()
     assert row.package_hash != LocalPackage(package).snapshot().package_hash
@@ -566,14 +843,24 @@ def test_simultaneous_replay_uses_one_run_and_one_evidence(tmp_path: Path) -> No
         )
     assert results[0] == results[1]
     with engine.connect() as connection:
-        assert connection.execute(
-            text("SELECT count(*) FROM data_governance.ingest_runs WHERE source=:source"),
-            {"source": source_name},
-        ).scalar_one() == 1
-        assert connection.execute(
-            text("SELECT count(*) FROM data_governance.raw_evidence WHERE source=:source"),
-            {"source": source_name},
-        ).scalar_one() == 1
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM data_governance.ingest_runs WHERE source=:source"
+                ),
+                {"source": source_name},
+            ).scalar_one()
+            == 1
+        )
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM data_governance.raw_evidence WHERE source=:source"
+                ),
+                {"source": source_name},
+            ).scalar_one()
+            == 1
+        )
     engine.dispose()
 
 
@@ -581,7 +868,9 @@ def test_simultaneous_replay_uses_one_run_and_one_evidence(tmp_path: Path) -> No
     os.getenv("RUN_DB_TESTS") != "1",
     reason="PostgreSQL efêmero do compose não está ativo",
 )
-def test_cli_reports_declared_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_reports_declared_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     from app.modules.data_governance.api.cli import main
 
     assert main(["summary", str(uuid4())]) == 1
@@ -636,7 +925,9 @@ def test_review_corrections_are_versioned_and_etag_guarded(tmp_path: Path) -> No
 
     candidate = repository.review_candidate(UUID(str(ingested["id"])), "game")
     assert candidate["state"] == "review"
-    assert candidate["cover"]["content"] is None  # Bytes require explicit private access.
+    assert (
+        candidate["cover"]["content"] is None
+    )  # Bytes require explicit private access.
     etag = str(candidate["etag"])
     corrected = repository.correct_review(
         UUID(str(ingested["id"])),
@@ -681,7 +972,9 @@ def test_review_corrections_are_versioned_and_etag_guarded(tmp_path: Path) -> No
 
     with engine.connect() as connection:
         correction_count = connection.execute(
-            text("SELECT count(*) FROM data_governance.review_corrections WHERE run_id=:id"),
+            text(
+                "SELECT count(*) FROM data_governance.review_corrections WHERE run_id=:id"
+            ),
             {"id": ingested["id"]},
         ).scalar_one()
         original = connection.execute(

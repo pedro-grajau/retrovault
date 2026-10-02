@@ -13,6 +13,7 @@ RULE_VERSION = "editorial-v1"
 _RULE_DESCRIPTIONS = {
     "editorial-v1": "unicode-nfkc:casefold:identity-title-platform-region-edition:box-art",
     "editorial-v2": "unicode-nfkc:strip-unicode-format-cf:casefold:identity-title-platform-region-edition:box-art",
+    "editorial-v3": "unicode-nfkc:strip-unicode-format-cf:casefold:identity-title-platform-region-edition:box-art:append-only-loopback-private-use-decisions",
 }
 RULE_FINGERPRINTS = {
     version: sha256(f"{version}:{description}".encode()).hexdigest()
@@ -32,7 +33,7 @@ REQUIRED_FIELDS = ("title", "platform")
 
 def normalize_text(value: str, rule_version: str = RULE_VERSION) -> str:
     value = unicodedata.normalize("NFKC", value)
-    if rule_version == "editorial-v2":
+    if rule_version in {"editorial-v2", "editorial-v3"}:
         value = "".join(char for char in value if unicodedata.category(char) != "Cf")
     return " ".join(value.split())
 

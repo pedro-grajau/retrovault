@@ -16,6 +16,20 @@ def test_environment_file_is_anchored_to_the_repository() -> None:
     assert Settings.model_config["env_file"] == PROJECT_ROOT / ".env"
 
 
+def test_legacy_retroachievements_key_name_is_supported(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("RETRO_ACHIEVEMENTS_KEY=fixture-private-key\n")
+    monkeypatch.delenv("RETROACHIEVEMENTS_API_KEY", raising=False)
+    monkeypatch.delenv("RETRO_ACHIEVEMENTS_KEY", raising=False)
+
+    configured = Settings(_env_file=env_file)
+
+    assert (
+        configured.retroachievements_api_key.get_secret_value()
+        == "fixture-private-key"
+    )
+
+
 def test_blank_database_url_fails_explicitly() -> None:
     with pytest.raises(ValidationError) as error:
         Settings(database_url="")
