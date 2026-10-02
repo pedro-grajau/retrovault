@@ -289,7 +289,7 @@ def _ingest_snapshot(
                 source_responses=source_responses,
             )
             preserved += 1
-        except PackageError, InvalidRecord:
+        except (PackageError, InvalidRecord):
             repository.fail(run_id, reference.record_id, "record_rejected", uuid4())
             rejected += 1
         except Exception:

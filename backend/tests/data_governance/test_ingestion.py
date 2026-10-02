@@ -216,6 +216,7 @@ def test_ra_snes_cli_ingests_every_batch_and_returns_all_summaries(
 
     summaries: list[dict[str, object]] = []
     sources: list[object] = []
+    catalog_versions: list[str] = []
     manifests = [tmp_path / "batch-1.json", tmp_path / "batch-2.json"]
 
     class FakeSource:
@@ -235,6 +236,7 @@ def test_ra_snes_cli_ingests_every_batch_and_returns_all_summaries(
 
         def create_batch_manifests(self, catalog, *, batch_size):
             assert batch_size == 2
+            catalog_versions.append(catalog["version"])
             return manifests
 
     def fake_ingest(source, _repository, _app_version):
@@ -260,15 +262,34 @@ def test_ra_snes_cli_ingests_every_batch_and_returns_all_summaries(
         ),
     )
 
-    assert cli.main(["ra-snes-ingest", "--page-size", "17", "--batch-size", "2"]) == 0
+    assert cli.main(
+        [
+            "ra-snes-ingest",
+            "--page-size",
+            "17",
+            "--batch-size",
+            "2",
+            "--attempt",
+            "retry1",
+        ]
+    ) == 0
 
     result = json.loads(capsys.readouterr().out)
     assert result["game_count"] == 3
     assert result["batch_count"] == 2
+    assert result["catalog_version"] == "console-3-catalog-attempt-retry1"
     assert result["batches"] == summaries
+    assert catalog_versions == ["console-3-catalog-attempt-retry1"]
     assert len(sources) == 2
     assert [source.manifest for source in sources] == manifests
     assert all(source.kwargs["expected_console_id"] == 3 for source in sources)
+    assert cli.main(
+        ["ra-snes-ingest", "--attempt", "../outside-cache"]
+    ) == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "code": "catalog_attempt_invalid"
+    }
+    assert len(sources) == 2
 
 
 def test_ra_snes_cli_rejects_empty_catalog(

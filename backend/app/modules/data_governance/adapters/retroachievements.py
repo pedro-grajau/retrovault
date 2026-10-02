@@ -208,7 +208,7 @@ class RetroAchievementsSource:
             try:
                 target = parsedate_to_datetime(value)
                 return max(0.0, (target - datetime.now(target.tzinfo)).total_seconds())
-            except TypeError, ValueError, OverflowError:
+            except (TypeError, ValueError, OverflowError):
                 return None
 
     def _request(
@@ -422,6 +422,7 @@ class RetroAchievementsSource:
                     or item["ConsoleID"] != console_id
                     or not isinstance(item.get("Title"), str)
                     or not item["Title"].strip()
+                    or any(0xD800 <= ord(character) <= 0xDFFF for character in item["Title"])
                     or type(item.get("NumAchievements")) is not int
                     or item["NumAchievements"] <= 0
                 ):
@@ -567,6 +568,10 @@ class RetroAchievementsSource:
             self.cache_dir / "manifests" / version / f"batch-size-{batch_size:04d}"
         )
         paths: list[Path] = []
+        batch_count = (len(games) + batch_size - 1) // batch_size
+        last_batch_version = f"{version}-n{batch_size}-b{batch_count:04d}"
+        if len(last_batch_version) > 100:
+            raise PackageError("catalog_version_invalid")
         for batch_index, start in enumerate(range(0, len(games), batch_size), start=1):
             batch = games[start : start + batch_size]
             record_ids = [item["ID"] for item in batch]
@@ -617,8 +622,10 @@ class RetroAchievementsSource:
             raise PackageError("source_response_invalid") from exc
         if (
             not isinstance(payload, dict)
-            or type(payload.get("ID")) is not int
-            or payload["ID"] != game_id
+            or (
+                "ID" in payload
+                and (type(payload["ID"]) is not int or payload["ID"] != game_id)
+            )
             or (
                 self.expected_console_id is not None
                 and (
@@ -644,9 +651,11 @@ class RetroAchievementsSource:
                     total_deadline=total_deadline,
                     cache_key=cover_cache_key,
                 )
-            except PackageError:
+            except PackageError as exc:
                 if image_url:
                     self._invalidate_cache(f"{source_version}:cover:{image_url}")
+                if str(exc) == "source_rate_limited":
+                    raise
                 # A resposta original continua preservada; uma capa indisponível
                 # vira uma pendência de quarentena na etapa de processamento.
                 image_url = None
@@ -809,6 +818,10 @@ class RetroAchievementsSource:
                         )
                     )
                 except PackageError as exc:
+                    if str(exc) == "source_rate_limited":
+                        # A limitação vale para a credencial inteira; registrar todos
+                        # os IDs restantes como falhas só ampliaria a pressão na API.
+                        raise
                     digest.update(reference.record_id.encode())
                     digest.update(str(exc.args[0]).encode())
                     records.append(SnapshotRecord(None, str(exc.args[0])))

@@ -116,6 +116,48 @@ def test_get_game_adapter_preserves_source_bytes_and_isolates_bad_media(
     assert "fixture-secret" not in snapshot.package_hash
 
 
+def test_get_game_response_without_id_uses_the_requested_id(tmp_path: Path) -> None:
+    game_id = 14402
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "source": "retroachievements",
+                "version": "get-game-without-id-v1",
+                "captured_at": "2026-09-30T12:00:00Z",
+                "actor": "Eduardo",
+                "record_ids": [game_id],
+            }
+        )
+    )
+    game_payload = json.dumps(
+        {"Title": "SNES title", "ConsoleID": 3, "Developer": "Studio"},
+        separators=(",", ":"),
+    ).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("API_GetGame.php"):
+            assert request.url.params["i"] == str(game_id)
+            return httpx.Response(200, content=game_payload)
+        if request.url.path.endswith("API_GetGameProgression.php"):
+            return httpx.Response(200, json={"ID": game_id, "NumDistinctPlayers": 23})
+        raise AssertionError("resposta inesperada")
+
+    snapshot = RetroAchievementsSource(
+        manifest_path,
+        "fixture-secret",
+        expected_console_id=3,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    ).snapshot()
+
+    record = snapshot.records[0]
+    assert record.payload is not None
+    mapped = json.loads(record.payload)
+    assert mapped["id"] == str(game_id)
+    assert mapped["attributes"]["platform"] == "SNES"
+    assert mapped["metrics"]["NumDistinctPlayers"] == 23
+
+
 def test_expected_console_guard_rejects_game_from_another_console(
     tmp_path: Path,
 ) -> None:
@@ -239,6 +281,39 @@ def test_get_game_failures_are_isolated_and_retries_are_bounded(tmp_path: Path) 
     )
 
 
+def test_rate_limit_aborts_the_manifest_instead_of_failing_every_game(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "source": "retroachievements",
+                "version": "rate-limit-v1",
+                "captured_at": "2026-09-30T12:00:00Z",
+                "actor": "Eduardo",
+                "record_ids": [30, 31],
+            }
+        )
+    )
+    requested_game_ids: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_game_ids.append(int(request.url.params["i"]))
+        return httpx.Response(429, headers={"retry-after": "0"})
+
+    source = RetroAchievementsSource(
+        manifest_path,
+        "fixture-secret",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ValueError, match="source_rate_limited"):
+        source.snapshot()
+
+    assert requested_game_ids == [30, 30, 30]
+
+
 def test_bad_ids_and_malformed_redirect_ports_are_isolated(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
@@ -290,7 +365,8 @@ def test_bad_ids_and_malformed_redirect_ports_are_isolated(tmp_path: Path) -> No
     ).snapshot()
 
     assert snapshot.records[0].payload is None
-    assert snapshot.records[1].payload is None
+    assert snapshot.records[1].payload is not None
+    assert json.loads(snapshot.records[1].payload)["attributes"]["title"] == "Sem ID"
     assert snapshot.records[2].source_payload is not None
     assert snapshot.records[3].source_payload is not None
     assert json.loads(snapshot.records[3].payload or b"{}")["media"] == []

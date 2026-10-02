@@ -248,8 +248,12 @@ class PostgresCatalogRepository:
     def _rights_reference(candidate: dict[str, Any], cover: dict[str, Any]) -> str:
         reference = candidate.get("rights_reference") or cover.get("rights_reference")
         if not isinstance(reference, str) or not reference.strip():
-            # This records the user-reported portfolio authorization, not a general license.
-            reference = "Autorização RetroAchievements para portfólio informada por Pedro-Lucas em 2026-09-30"
+            if cover.get("publication_right") != "confirmed":
+                raise PublicationConflict("candidate_not_eligible")
+            reference = (
+                "Direitos de publicação marcados como confirmados na evidência "
+                "editorial; referência externa detalhada não registrada."
+            )
         return reference[:500]
 
     def publish(
@@ -269,6 +273,11 @@ class PostgresCatalogRepository:
             raise ValueError("invalid_idempotency_key")
         source = candidate.get("source")
         source_record_id = str(candidate.get("record_id", ""))
+        cover_for_reference = candidate.get("cover")
+        rights_reference = self._rights_reference(
+            candidate,
+            cover_for_reference if isinstance(cover_for_reference, dict) else {},
+        )
         request_hash = self._request_hash(
             "publish",
             {
@@ -304,6 +313,13 @@ class PostgresCatalogRepository:
             or not isinstance(cover.get("content"), bytes)
             or cover.get("storage_right") != "confirmed"
             or cover.get("publication_right") != "confirmed"
+            or (
+                cover.get("source_publication_right") == "unknown"
+                and (
+                    not cover.get("rights_decision_id")
+                    or cover.get("rights_scope") != "loopback_only"
+                )
+            )
             or not str(cover.get("attribution", "")).strip()
         ):
             raise PublicationConflict("candidate_etag_or_cover_invalid")
@@ -333,7 +349,6 @@ class PostgresCatalogRepository:
             raise PublicationConflict("cover_invalid") from exc
 
         cover_hash = hashlib.sha256(image_content).hexdigest()
-        rights_reference = self._rights_reference(candidate, cover)
         now = datetime.now(UTC)
         try:
             verified_at = candidate.get("captured_at")
@@ -427,6 +442,8 @@ class PostgresCatalogRepository:
                 "cover_hash": cover_hash,
                 "cover_content_type": content_type,
                 "cover_attribution": cover["attribution"],
+                "cover_source_publication_right": cover.get("source_publication_right"),
+                "cover_rights_scope": cover.get("rights_scope"),
                 "rights_reference": rights_reference,
                 "active": True,
             }

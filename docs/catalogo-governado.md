@@ -1,10 +1,10 @@
 # Operação do catálogo governado
 
-O fluxo privado é composto por aquisição, processamento, revisão, correção, aprovação e retirada. Execute as etapas no backend com acesso autorizado ao PostgreSQL. A CI usa fixtures e não chama a API.
+O fluxo privado é composto por aquisição, processamento, revisão, correção, aprovação e retirada. Execute as etapas no backend com acesso autorizado ao PostgreSQL. A CI usa fixtures e não chama a API. O Compose publica frontend e API somente em `127.0.0.1`; a projeção local não deve ser exposta a interfaces de rede externas.
 
 ## Pré-requisitos da carga RetroAchievements
 
-Configure `RETROACHIEVEMENTS_API_KEY` no `.env` privado de `retrovault/`; o Compose encaminha a variável somente ao backend. Não passe a chave como argumento nem a registre em logs. A cache de respostas, catálogos, páginas e manifests é persistida no volume privado `retroachievements-cache`.
+Configure `RETRO_ACHIEVEMENTS_KEY` (ou `RETROACHIEVEMENTS_API_KEY`) no `.env` privado de `retrovault/`; o Compose encaminha a chave somente ao backend sob o nome `RETROACHIEVEMENTS_API_KEY`. Não passe a chave como argumento nem a registre em logs. A cache de respostas, catálogos, páginas e manifests é persistida no volume privado `retroachievements-cache`.
 
 Para executar a ingestão do SNES pelo PostgreSQL Compose:
 
@@ -13,9 +13,21 @@ docker compose up -d db backend
 docker compose exec backend python -m app.modules.data_governance.api.cli ra-snes-ingest
 ```
 
-A primeira operação descobre sistemas ativos de jogos e enumera o SNES (`ID 3`) com `f=1`, usando offsets e lotes paginados. Por padrão, a página contém até 100 jogos e cada manifesto contém até 1.000 IDs. Catálogo e manifests ficam em cache; repetir a operação continua os lotes ainda não concluídos e reaproveita respostas cacheadas. Para refazer a enumeração e chamadas, passe `--refresh-cache`; isso cria uma nova versão de catálogo. `--page-size` e `--batch-size` permitem reduzir os lotes sem alterar os limites máximos. O comando não publica automaticamente.
+A primeira operação descobre sistemas ativos de jogos e enumera o SNES (`ID 3`) com `f=1`, usando offsets e lotes paginados. Por padrão, a página contém até 100 jogos e cada manifesto contém até 1.000 IDs. Catálogo e manifests ficam em cache; repetir a operação continua os lotes ainda não concluídos e reaproveita respostas cacheadas. Se uma execução concluída precisar ser refeita, passe `--attempt <identificador>` para criar novas versões de ingestão a partir das páginas de catálogo cacheadas; as execuções anteriores permanecem auditáveis e os detalhes dos jogos são consultados novamente. Para refazer também a enumeração, passe `--refresh-cache`; isso cria uma nova versão de catálogo. `--page-size` e `--batch-size` permitem reduzir os lotes sem alterar os limites máximos. O comando não publica automaticamente.
 
-Antes de aprovar candidatos, revise os detalhes privados. Uma capa obtida da API fica disponível para revisão privada, mas direitos de publicação começam como desconhecidos; candidato sem capa válida ou direitos e atribuição confirmados permanece em quarentena. A aprovação continua individual, com ETag, motivo e chave de idempotência.
+Uma capa obtida da API fica disponível para revisão privada, mas a evidência original conserva os direitos de publicação como desconhecidos. O responsável pelo projeto declarou que o catálogo é um portfólio particular e invocou a exceção de uso privado da seção Copyrights dos [termos da RetroAchievements](https://retroachievements.org/terms). A decisão é registrada em tabela append-only por capa, com essa base, o escopo `loopback_only`, data e ator; ela não afirma que a RetroAchievements concedeu uma autorização geral. O comando de publicação verifica a plataforma SNES, a capa válida e a atribuição `RetroAchievements`, processa com `editorial-v3` e publica os candidatos elegíveis individualmente com ETag, motivo e chave de idempotência. O campo `publisher` continua sendo metadado do jogo fornecido pela API, não uma declaração de distribuidor ou titular da capa.
+
+Para publicar o catálogo privado SNES já ingerido, informe exatamente `catalog_version` retornada por `ra-snes-ingest` (sem o sufixo `-n...-b....`) e copie do mesmo resultado a contagem de jogos, lotes e o tamanho dos lotes. A verificação exige todas as evidências preservadas, todos os lotes contínuos e um único tamanho de lote escolhido; assim uma execução parcial não é publicada como catálogo completo:
+
+```bash
+docker compose exec backend python -m app.modules.data_governance.api.cli ra-snes-private-publish \
+  --catalog-version console-3-<hash32>[-timestamp-sorteio][-attempt-id] \
+  --expected-game-count <game_count> \
+  --expected-batch-count <batch_count> \
+  --batch-size <batch_size>
+```
+
+O comando é retomável: decisões, aprovações e projeção são idempotentes e cada jogo conserva sua trilha de auditoria. Candidatos sem capa válida, atribuição ou campos obrigatórios ficam fora da publicação e aparecem resumidos na saída.
 
 Para uma carga manual existente, prepare um manifesto versionado fora do repositório com esta forma:
 
@@ -37,7 +49,8 @@ O manifesto aceita até 1.000 IDs. Cada aquisição tem limite total de 15 minut
 
 ```text
 scripts/catalog-ingest.sh ra-ingest /caminho/privado/manifesto.json
-scripts/catalog-ingest.sh ra-snes-ingest [--page-size 100] [--batch-size 1000] [--refresh-cache]
+scripts/catalog-ingest.sh ra-snes-ingest [--page-size 100] [--batch-size 1000] [--refresh-cache] [--attempt retry1]
+scripts/catalog-ingest.sh ra-snes-private-publish --catalog-version <versão-do-catálogo> --expected-game-count <jogos> --expected-batch-count <lotes> [--batch-size <tamanho>]
 scripts/catalog-ingest.sh process <run-id>
 scripts/catalog-ingest.sh process-summary <run-id>
 scripts/catalog-ingest.sh review <run-id> <id-externo>
