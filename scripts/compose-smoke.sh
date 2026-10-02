@@ -32,8 +32,16 @@ test "$actual" = "$expected"
 
 compose run --rm --no-deps \
   --volume "$PWD/backend/tests:/app/backend/tests:ro" \
+  --env RUN_DB_TESTS=1 \
+  backend pytest tests/catalog/test_postgres_title_search.py -q -s --log-cli-level=WARNING
+
+compose run --rm --no-deps \
+  --volume "$PWD/backend/tests:/app/backend/tests:ro" \
   --volume "$PWD/fixtures:/app/fixtures:ro" \
   --env RUN_DB_TESTS=1 \
-  backend pytest tests/data_governance/test_ingestion.py tests/data_governance/test_processing.py -q
+  backend pytest \
+    tests/data_governance/test_ingestion.py \
+    tests/data_governance/test_processing.py \
+    -q
 
 echo "Compose smoke passed: API, frontend and seven module schemas are healthy"

@@ -132,6 +132,34 @@ footer {
 .brand span {
   color: var(--accent);
 }
+.header-search {
+  flex: 1 1 22rem;
+  max-width: 480px;
+  min-width: 0;
+}
+.header-search form {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+}
+.header-search-error {
+  flex-basis: 100%;
+}
+.header-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line-functional);
+  border-radius: 0.55rem;
+  color: var(--text);
+  background: var(--bg);
+}
+.header-search button {
+  min-width: 82px;
+}
 .site-header nav {
   display: flex;
   align-items: center;
@@ -232,27 +260,21 @@ h1 {
   color: var(--text);
   background: var(--bg);
 }
-.search-controls input:disabled {
-  color: var(--muted);
-  opacity: 1;
-  cursor: not-allowed;
-}
-.search-controls button,
-.search-controls button:disabled {
+.search-controls button {
   min-width: 96px;
   min-height: 46px;
-  border: 1px solid var(--line-functional);
-  border-radius: 0.55rem;
-  color: var(--muted);
-  background: var(--surface-overlay);
-  opacity: 1;
-  cursor: not-allowed;
 }
 .field-hint {
   display: block;
   margin-top: 0.45rem;
   color: var(--muted);
   font-size: 0.79rem;
+}
+.field-error {
+  margin: 0.1rem 0 0;
+  color: var(--danger);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .home-platforms {
@@ -371,6 +393,11 @@ h1 {
   color: var(--muted);
   font-size: 0.73rem;
   font-weight: 700;
+}
+.game-edition {
+  margin: -0.45rem 0 0.7rem;
+  color: var(--muted);
+  font-size: 0.76rem;
 }
 .game-card h3 {
   margin: 0 0 0.75rem;
@@ -529,6 +556,9 @@ h1 {
   align-items: start;
   gap: 1.5rem;
 }
+.catalog-search {
+  min-width: 0;
+}
 .filter-panel {
   display: grid;
   gap: 0.55rem;
@@ -633,6 +663,12 @@ footer {
   .home-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .header-search {
+    flex-basis: 14rem;
+  }
+  .status {
+    display: none;
+  }
 }
 
 @media (max-width: 767px) {
@@ -650,6 +686,11 @@ footer {
   .site-header nav {
     order: 3;
     width: 100%;
+  }
+  .header-search {
+    order: 4;
+    flex-basis: 100%;
+    max-width: none;
   }
   .site-header nav a {
     flex: 1;

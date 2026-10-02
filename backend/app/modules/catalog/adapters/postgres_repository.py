@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from app.modules.catalog.domain.publication import (
     PublicationConflict,
     PublishedGame,
 )
+from app.modules.catalog.ports.repository import PublishedSearchHit
 
 _EDITORIAL_FIELDS = {
     "title", "platform", "region", "edition", "genre", "developer",
@@ -101,6 +103,98 @@ class PostgresCatalogRepository:
             raise ValueError("invalid_cursor") from exc
 
     @staticmethod
+    def _search_context_hash(
+        *,
+        query: str,
+        platform: str | None,
+        genre: str | None,
+        cursor_context: str | None,
+    ) -> str:
+        normalized_platform = platform.strip().lower() if platform else None
+        normalized_genre = genre.strip().lower() if genre else None
+        context = json.dumps(
+            {
+                "query": query.strip(),
+                "platform": normalized_platform or None,
+                "genre": normalized_genre or None,
+                "additional": cursor_context,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(context).hexdigest()
+
+    @staticmethod
+    def _search_cursor_encode(
+        *,
+        rank: int,
+        similarity: float,
+        game_id: UUID,
+        search_context: str,
+    ) -> str:
+        encoded = json.dumps(
+            {
+                "v": 1,
+                "rank": rank,
+                "similarity": similarity,
+                "id": str(game_id),
+                "context": search_context,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _search_cursor_decode(value: str | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if not value or len(value) > 1024:
+            raise ValueError("invalid_cursor")
+        try:
+            raw = base64.b64decode(
+                value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+            )
+            decoded = json.loads(raw)
+            if (
+                not isinstance(decoded, dict)
+                or set(decoded)
+                != {"v", "rank", "similarity", "id", "context"}
+                or type(decoded["v"]) is not int
+                or decoded["v"] != 1
+                or type(decoded["rank"]) is not int
+                or decoded["rank"] not in (0, 1, 2)
+                or type(decoded["similarity"]) not in (int, float)
+                or not 0 <= decoded["similarity"] <= 1
+                or not math.isfinite(decoded["similarity"])
+                or not isinstance(decoded["id"], str)
+                or not isinstance(decoded["context"], str)
+                or len(decoded["context"]) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in decoded["context"]
+                )
+            ):
+                raise ValueError
+            game_id = UUID(decoded["id"])
+            if str(game_id) != decoded["id"]:
+                raise ValueError
+            decoded["id"] = game_id
+            decoded["similarity"] = float(decoded["similarity"])
+            return decoded
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            UnicodeError,
+            OverflowError,
+            json.JSONDecodeError,
+            binascii.Error,
+        ) as exc:
+            raise ValueError("invalid_cursor") from exc
+
+    @staticmethod
     def _json_default(value: Any) -> str:
         if isinstance(value, datetime):
             return value.isoformat()
@@ -162,6 +256,126 @@ class PostgresCatalogRepository:
             last = games[-1]
             next_cursor = self._cursor_encode(last.id)
         return games, next_cursor
+
+    def search_games(
+        self,
+        *,
+        query: str,
+        limit: int,
+        cursor: str | None = None,
+        platform: str | None = None,
+        genre: str | None = None,
+        cursor_context: str | None = None,
+    ) -> tuple[list[PublishedSearchHit], str | None]:
+        """Search only active published titles with an ordered, keyset cursor."""
+        if len(query.strip()) < 2 or len(query) > 100:
+            raise ValueError("invalid_search_query")
+        if not any(character.isalnum() for character in query):
+            return [], None
+
+        search_context = self._search_context_hash(
+            query=query,
+            platform=platform,
+            genre=genre,
+            cursor_context=cursor_context,
+        )
+        decoded = self._search_cursor_decode(cursor)
+        if decoded is not None and decoded["context"] != search_context:
+            raise ValueError("invalid_cursor")
+        params: dict[str, Any] = {"query": query, "limit": limit + 1}
+        clauses = ["g.active"]
+        normalized_platform = platform.strip().lower() if platform else None
+        normalized_genre = genre.strip().lower() if genre else None
+        if normalized_platform:
+            clauses.append("lower(g.platform) = lower(:platform)")
+            params["platform"] = normalized_platform
+        if normalized_genre:
+            clauses.append(
+                "lower(g.editorial->'attributes'->>'genre') = lower(:genre)"
+            )
+            params["genre"] = normalized_genre
+
+        cursor_clause = ""
+        if decoded is not None:
+            cursor_clause = """
+                WHERE match_rank > :cursor_rank
+                   OR (match_rank = :cursor_rank AND title_similarity < :cursor_similarity)
+                   OR (match_rank = :cursor_rank AND title_similarity = :cursor_similarity
+                       AND id > :cursor_id)
+            """
+            params.update(
+                {
+                    "cursor_rank": decoded["rank"],
+                    "cursor_similarity": decoded["similarity"],
+                    "cursor_id": decoded["id"],
+                }
+            )
+
+        statement = text(f"""
+            WITH search_input AS (
+                SELECT catalog.normalize_title(:query) AS normalized_query
+            ), candidates AS (
+                SELECT g.id, g.title, g.platform, g.editorial, g.source,
+                       g.source_record_id, g.version, g.etag,
+                       g.updated_at AS verified_at, g.cover_hash,
+                       m.content_type, m.attribution,
+                       catalog.normalize_title(g.title) AS normalized_title,
+                       search_input.normalized_query
+                FROM catalog.published_games g
+                JOIN catalog.published_media m ON m.content_hash = g.cover_hash
+                CROSS JOIN search_input
+                WHERE {' AND '.join(clauses)}
+            ), matched AS (
+                SELECT * FROM candidates
+                WHERE normalized_query <> '' AND (
+                    normalized_title = normalized_query
+                    OR strpos(normalized_title, normalized_query) > 0
+                    OR to_tsvector('simple', normalized_title)
+                       @@ plainto_tsquery('simple', normalized_query)
+                    OR (length(normalized_query) >= 4
+                        AND normalized_title % normalized_query
+                        AND similarity(normalized_title, normalized_query) >= 0.30)
+                )
+            ), ranked AS (
+                SELECT matched.*,
+                       CASE
+                           WHEN normalized_title = normalized_query THEN 0
+                           WHEN left(normalized_title, length(normalized_query)) = normalized_query THEN 1
+                           WHEN strpos(normalized_title, normalized_query) > 0
+                             OR to_tsvector('simple', normalized_title)
+                                @@ plainto_tsquery('simple', normalized_query) THEN 1
+                           ELSE 2
+                       END AS match_rank,
+                       round(
+                           similarity(normalized_title, normalized_query)::numeric,
+                           6
+                       )::double precision AS title_similarity
+                FROM matched
+            )
+            SELECT * FROM ranked
+            {cursor_clause}
+            ORDER BY match_rank, title_similarity DESC, id
+            LIMIT :limit
+        """)
+        with self.engine.begin() as connection:
+            connection.execute(text("SET LOCAL pg_trgm.similarity_threshold = 0.30"))
+            rows = list(connection.execute(statement, params).mappings())
+        has_more = len(rows) > limit
+        page_rows = rows[:limit]
+        hits = [
+            PublishedSearchHit(
+                game=self._row_game(row),
+                cursor_after=self._search_cursor_encode(
+                    rank=row["match_rank"],
+                    similarity=float(row["title_similarity"]),
+                    game_id=row["id"],
+                    search_context=search_context,
+                ),
+            )
+            for row in page_rows
+        ]
+        next_cursor = hits[-1].cursor_after if has_more and hits else None
+        return hits, next_cursor
 
     def get_game(self, game_id: UUID) -> PublishedGame | None:
         with self.engine.connect() as connection:

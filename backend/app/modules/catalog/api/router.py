@@ -178,14 +178,18 @@ async def list_facets() -> GameFacetsResponse:
 async def list_games(
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=1024),
+    q: str | None = Query(default=None, min_length=2, max_length=100),
     platform: str | None = Query(default=None, min_length=1, max_length=100),
     genre: str | None = Query(default=None, min_length=1, max_length=100),
     availability: Availability | None = Query(default=None),
     sort: SortOrder = Query(default="catalog"),
 ) -> GameListResponse:
+    if q is not None and len(q.strip()) < 2:
+        raise HTTPException(status_code=422, detail="invalid_search_query")
     try:
         page = _discovery_service().list_games(
             limit=limit,
+            query=q.strip() if q is not None else None,
             cursor=cursor,
             platform=platform,
             genre=genre,

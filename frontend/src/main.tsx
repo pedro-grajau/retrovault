@@ -122,7 +122,10 @@ function GameCard({
 }) {
   const genre = game.attributes.genre
   return (
-    <article className="game-card">
+    <article
+      className="game-card"
+      aria-label={`${game.title}, ${game.platform}`}
+    >
       <div className="cover-wrap">
         <img
           src={apiUrl(game.cover_url)}
@@ -137,37 +140,21 @@ function GameCard({
           {genre ? ` · ${genre}` : ""}
         </p>
         <h3>{game.title}</h3>
+        {(game.attributes.region || game.attributes.edition) && (
+          <p className="game-edition">
+            {game.attributes.region ? `Região: ${game.attributes.region}` : ""}
+            {game.attributes.region && game.attributes.edition ? " · " : ""}
+            {game.attributes.edition
+              ? `Edição: ${game.attributes.edition}`
+              : ""}
+          </p>
+        )}
         <OfferFacts
           offers={"offers" in game ? game.offers : undefined}
           commerceUnavailable={commerceUnavailable}
         />
       </div>
     </article>
-  )
-}
-
-function SearchPreview() {
-  return (
-    <search className="search-preview">
-      <form onSubmit={(event) => event.preventDefault()}>
-        <label htmlFor="home-search">Encontre um clássico</label>
-        <div className="search-controls">
-          <input
-            id="home-search"
-            type="search"
-            placeholder="A busca por títulos chega em breve"
-            disabled
-            aria-describedby="search-hint"
-          />
-          <button type="submit" disabled aria-label="Buscar jogos">
-            Buscar
-          </button>
-        </div>
-        <span id="search-hint" className="field-hint">
-          A busca direta será liberada na próxima etapa.
-        </span>
-      </form>
-    </search>
   )
 }
 
@@ -227,7 +214,6 @@ function HomePage() {
           Encontre jogos que marcaram época e descubra o que está disponível no
           acervo.
         </p>
-        <SearchPreview />
       </section>
 
       <section
@@ -334,7 +320,7 @@ function HomePage() {
 }
 
 function initialFilters(): URLSearchParams {
-  const allowedKeys = ["platform", "genre", "availability", "cursor"]
+  const allowedKeys = ["q", "platform", "genre", "availability", "cursor"]
   const lastValues = new Map<string, string>()
   for (const [key, value] of new URLSearchParams(window.location.search)) {
     if (allowedKeys.includes(key)) lastValues.set(key, value)
@@ -347,6 +333,14 @@ function initialFilters(): URLSearchParams {
   return params
 }
 
+function searchLength(value: string): number {
+  return Array.from(value).length
+}
+
+function limitSearch(value: string): string {
+  return Array.from(value).slice(0, 100).join("")
+}
+
 function canonicalizeFilters(params: URLSearchParams) {
   const query = params.toString()
   const canonicalUrl = `/catalog${query ? `?${query}` : ""}`
@@ -357,6 +351,7 @@ function canonicalizeFilters(params: URLSearchParams) {
 
 function CatalogPage() {
   const [params, setParams] = useState(initialFilters)
+  const [draftSearch, setDraftSearch] = useState(() => params.get("q") ?? "")
   const [draftPlatform, setDraftPlatform] = useState(
     () => params.get("platform") ?? "",
   )
@@ -366,6 +361,7 @@ function CatalogPage() {
   )
   const [catalog, setCatalog] = useState<CatalogState>(emptyCatalog)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [searchError, setSearchError] = useState("")
   const catalogRef = useRef(catalog)
   const requestSequence = useRef(0)
 
@@ -375,6 +371,27 @@ function CatalogPage() {
 
   const load = useCallback(
     async (query: URLSearchParams, append = false, signal?: AbortSignal) => {
+      const requestedSearch = query.get("q")
+      if (
+        requestedSearch !== null &&
+        (searchLength(requestedSearch.trim()) < 2 ||
+          searchLength(requestedSearch) > 100)
+      ) {
+        setSearchError(
+          searchLength(requestedSearch.trim()) < 2
+            ? "Digite pelo menos 2 caracteres para buscar."
+            : "Use no máximo 100 caracteres na busca.",
+        )
+        setCatalog({
+          games: [],
+          nextCursor: null,
+          state: "ready",
+          commerceUnavailable: false,
+          stale: false,
+          message: "Corrija o termo de busca para ver os resultados.",
+        })
+        return
+      }
       const requestId = append
         ? requestSequence.current
         : ++requestSequence.current
@@ -408,10 +425,16 @@ function CatalogPage() {
           stale: false,
           message: games.length
             ? `${games.length} ${games.length === 1 ? "jogo publicado carregado" : "jogos publicados carregados"}.`
-            : "Nenhum jogo publicado corresponde a estes filtros.",
+            : query.has("q")
+              ? `Nenhum título publicado corresponde a “${query.get("q")}”.`
+              : "Nenhum jogo publicado corresponde a estes filtros.",
           paginationError: undefined,
         })
-        if (!query.has("availability") && !query.has("cursor"))
+        if (
+          !query.has("availability") &&
+          !query.has("cursor") &&
+          !query.has("q")
+        )
           writeCatalogSnapshot(catalogSnapshotKey(query), games)
       } catch {
         if (signal?.aborted || requestSequence.current !== requestId) return
@@ -424,7 +447,12 @@ function CatalogPage() {
           }))
           return
         }
-        if (!append && !query.has("availability") && !query.has("cursor")) {
+        if (
+          !append &&
+          !query.has("availability") &&
+          !query.has("cursor") &&
+          !query.has("q")
+        ) {
           const snapshot = readCatalogSnapshot(catalogSnapshotKey(query))
           if (snapshot?.items.length) {
             setCatalog({
@@ -472,25 +500,53 @@ function CatalogPage() {
   }, [])
 
   useEffect(() => {
+    setDraftSearch(params.get("q") ?? "")
     setDraftPlatform(params.get("platform") ?? "")
     setDraftGenre(params.get("genre") ?? "")
     setDraftAvailability(params.get("availability") ?? "")
+    const search = params.get("q")
+    setSearchError(
+      search !== null && searchLength(search.trim()) < 2
+        ? "Digite pelo menos 2 caracteres para buscar."
+        : search !== null && searchLength(search) > 100
+          ? "Use no máximo 100 caracteres na busca."
+          : "",
+    )
   }, [params])
 
   function submitFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const searchTerm = draftSearch.trim()
+    if (
+      searchTerm &&
+      (searchLength(searchTerm) < 2 || searchLength(searchTerm) > 100)
+    ) {
+      setSearchError(
+        searchLength(searchTerm) < 2
+          ? "Digite pelo menos 2 caracteres para buscar."
+          : "Use no máximo 100 caracteres na busca.",
+      )
+      return
+    }
     requestSequence.current += 1
+    setSearchError("")
     const next = new URLSearchParams()
+    if (searchTerm) next.set("q", searchTerm)
     if (draftPlatform.trim()) next.set("platform", draftPlatform.trim())
     if (draftGenre.trim()) next.set("genre", draftGenre.trim())
     if (draftAvailability) next.set("availability", draftAvailability)
-    const query = next.toString()
-    window.history.pushState({}, "", `/catalog${query ? `?${query}` : ""}`)
+    const queryString = next.toString()
+    window.history.pushState(
+      {},
+      "",
+      `/catalog${queryString ? `?${queryString}` : ""}`,
+    )
     setParams(next)
   }
 
   function clearFilters() {
     requestSequence.current += 1
+    setDraftSearch("")
     window.history.pushState({}, "", "/catalog")
     setParams(new URLSearchParams())
   }
@@ -498,6 +554,7 @@ function CatalogPage() {
   const selectedPlatform = params.get("platform") ?? ""
   const selectedGenre = params.get("genre") ?? ""
   const selectedAvailability = params.get("availability") ?? ""
+  const selectedSearch = params.get("q") ?? ""
 
   return (
     <main id="content" className="catalog-page">
@@ -513,62 +570,91 @@ function CatalogPage() {
       </section>
 
       <section className="catalog-layout" aria-label="Exploração do catálogo">
-        <form
-          className="filter-panel"
-          aria-label="Filtros do catálogo"
-          onSubmit={submitFilters}
+        <search
+          className="catalog-search"
+          aria-label="Busca e filtros do catálogo"
         >
-          <div className="filter-heading">
-            <h2>Filtrar jogos</h2>
-            <button
-              type="button"
-              className="clear-filters"
-              onClick={clearFilters}
-              disabled={
-                !selectedPlatform &&
-                !selectedGenre &&
-                !selectedAvailability &&
-                !draftPlatform.trim() &&
-                !draftGenre.trim() &&
-                !draftAvailability
-              }
+          <form className="filter-panel" onSubmit={submitFilters}>
+            <div className="filter-heading">
+              <h2>Filtrar jogos</h2>
+              <button
+                type="button"
+                className="clear-filters"
+                onClick={clearFilters}
+                disabled={
+                  !selectedPlatform &&
+                  !selectedGenre &&
+                  !selectedAvailability &&
+                  !selectedSearch &&
+                  !draftSearch.trim() &&
+                  !draftPlatform.trim() &&
+                  !draftGenre.trim() &&
+                  !draftAvailability
+                }
+              >
+                Limpar
+              </button>
+            </div>
+            <label htmlFor="filter-search">Buscar título</label>
+            <input
+              id="filter-search"
+              type="search"
+              value={draftSearch}
+              maxLength={200}
+              aria-invalid={searchError ? true : undefined}
+              aria-describedby={`catalog-search-hint${searchError ? " catalog-search-error" : ""}`}
+              onChange={(event) => {
+                setDraftSearch(limitSearch(event.target.value))
+                setSearchError("")
+              }}
+            />
+            <p id="catalog-search-hint" className="field-hint">
+              Digite de 2 a 100 caracteres. A busca considera acentos, pontuação
+              e pequenas variações de grafia.
+            </p>
+            {searchError && (
+              <p
+                id="catalog-search-error"
+                className="field-error"
+                role="status"
+              >
+                {searchError}
+              </p>
+            )}
+            <label htmlFor="filter-platform">Plataforma</label>
+            <input
+              id="filter-platform"
+              type="text"
+              value={draftPlatform}
+              placeholder="Ex.: PlayStation"
+              onChange={(event) => setDraftPlatform(event.target.value)}
+            />
+            <label htmlFor="filter-genre">Gênero</label>
+            <input
+              id="filter-genre"
+              type="text"
+              value={draftGenre}
+              placeholder="Ex.: Aventura"
+              onChange={(event) => setDraftGenre(event.target.value)}
+            />
+            <label htmlFor="filter-availability">Disponibilidade</label>
+            <select
+              id="filter-availability"
+              value={draftAvailability}
+              onChange={(event) => setDraftAvailability(event.target.value)}
             >
-              Limpar
+              <option value="">Todas</option>
+              <option value="available">Disponíveis agora</option>
+              <option value="unavailable">Indisponíveis</option>
+            </select>
+            <p className="field-hint filter-hint">
+              Busca e filtros também ficam salvos no endereço desta página.
+            </p>
+            <button className="button-primary apply-filters" type="submit">
+              Buscar jogos
             </button>
-          </div>
-          <label htmlFor="filter-platform">Plataforma</label>
-          <input
-            id="filter-platform"
-            type="text"
-            value={draftPlatform}
-            placeholder="Ex.: PlayStation"
-            onChange={(event) => setDraftPlatform(event.target.value)}
-          />
-          <label htmlFor="filter-genre">Gênero</label>
-          <input
-            id="filter-genre"
-            type="text"
-            value={draftGenre}
-            placeholder="Ex.: Aventura"
-            onChange={(event) => setDraftGenre(event.target.value)}
-          />
-          <label htmlFor="filter-availability">Disponibilidade</label>
-          <select
-            id="filter-availability"
-            value={draftAvailability}
-            onChange={(event) => setDraftAvailability(event.target.value)}
-          >
-            <option value="">Todas</option>
-            <option value="available">Disponíveis agora</option>
-            <option value="unavailable">Indisponíveis</option>
-          </select>
-          <p className="field-hint">
-            Os filtros também ficam salvos no endereço desta página.
-          </p>
-          <button className="button-primary apply-filters" type="submit">
-            Aplicar filtros
-          </button>
-        </form>
+          </form>
+        </search>
 
         <section
           className="catalog-results"
@@ -582,7 +668,11 @@ function CatalogPage() {
           </p>
           <div className="results-heading">
             <div>
-              <h2 id="results-title">Jogos publicados</h2>
+              <h2 id="results-title">
+                {selectedSearch
+                  ? `Resultados para “${selectedSearch}”`
+                  : "Jogos publicados"}
+              </h2>
               {catalog.state === "ready" && (
                 <p>
                   {catalog.games.length}{" "}
@@ -676,7 +766,10 @@ function CatalogPage() {
           ) : (
             <div className="state-panel" role="status">
               <p>{catalog.message}</p>
-              {(selectedPlatform || selectedGenre || selectedAvailability) && (
+              {(selectedSearch ||
+                selectedPlatform ||
+                selectedGenre ||
+                selectedAvailability) && (
                 <button
                   className="button-secondary"
                   type="button"
@@ -697,6 +790,39 @@ function App() {
   const version = useVersion()
   const path = useLocationPath()
   const page = path === "/catalog" ? <CatalogPage /> : <HomePage />
+  const [headerSearch, setHeaderSearch] = useState("")
+  const [headerSearchError, setHeaderSearchError] = useState("")
+
+  function submitHeaderSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const input = event.currentTarget.elements.namedItem("q")
+    if (!(input instanceof HTMLInputElement)) return
+
+    const searchTerm = input.value.trim()
+    const length = searchLength(searchTerm)
+    if (length < 2 || length > 100) {
+      const message =
+        length < 2
+          ? "Digite pelo menos 2 caracteres para buscar."
+          : "Use no máximo 100 caracteres na busca."
+      setHeaderSearchError(message)
+      input.setCustomValidity(message)
+      input.reportValidity()
+      return
+    }
+
+    input.setCustomValidity("")
+    setHeaderSearchError("")
+    const next = new URLSearchParams({ q: searchTerm })
+    if (path === "/catalog") {
+      const platform = new URLSearchParams(window.location.search).get(
+        "platform",
+      )
+      if (platform?.trim()) next.set("platform", platform.trim())
+    }
+    window.history.pushState({}, "", `/catalog?${next.toString()}`)
+    window.dispatchEvent(new PopStateEvent("popstate"))
+  }
 
   return (
     <>
@@ -711,6 +837,43 @@ function App() {
         <a className="brand" href="/" aria-label="RetroVault, página inicial">
           RETRO<span>VAULT</span>
         </a>
+        <search className="header-search" aria-label="Buscar no catálogo">
+          <form onSubmit={submitHeaderSearch}>
+            <label className="visually-hidden" htmlFor="header-search">
+              Buscar título no catálogo
+            </label>
+            <input
+              id="header-search"
+              name="q"
+              type="search"
+              value={headerSearch}
+              placeholder="Buscar título"
+              maxLength={200}
+              aria-invalid={headerSearchError ? true : undefined}
+              aria-describedby={`header-search-hint${headerSearchError ? " header-search-error" : ""}`}
+              onChange={(event) => {
+                setHeaderSearch(limitSearch(event.target.value))
+                setHeaderSearchError("")
+                event.currentTarget.setCustomValidity("")
+              }}
+            />
+            <span id="header-search-hint" className="visually-hidden">
+              Digite de 2 a 100 caracteres.
+            </span>
+            {headerSearchError && (
+              <span
+                id="header-search-error"
+                className="visually-hidden"
+                role="status"
+              >
+                {headerSearchError}
+              </span>
+            )}
+            <button className="button-primary" type="submit">
+              Buscar
+            </button>
+          </form>
+        </search>
         <nav aria-label="Navegação principal">
           <a aria-current={path === "/" ? "page" : undefined} href="/">
             Descobrir
