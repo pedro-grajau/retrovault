@@ -102,24 +102,24 @@ def parse_record(
         if len({item.path for item in media}) != len(media):
             raise ValueError()
         metrics_data = data.get("metrics", {})
-        if (
-            not isinstance(metrics_data, dict)
-            or set(metrics_data) - PROGRESSION_METRIC_FIELDS
-            or any(
-                type(value) is not int or value < 0 for value in metrics_data.values()
-            )
-        ):
+        if not isinstance(metrics_data, dict):
             raise ValueError()
         captured_at = metric_captured_at or datetime.now(UTC)
-        metrics = tuple(
-            SourceMetric(
-                name=name,
-                value=value,
-                endpoint="API_GetGameProgression.php",
-                captured_at=captured_at,
+        metrics_list: list[SourceMetric] = []
+        for name, value in metrics_data.items():
+            if not isinstance(name, str) or name not in PROGRESSION_METRIC_FIELDS:
+                raise ValueError()
+            if type(value) is not int or value < 0:
+                raise ValueError()
+            metrics_list.append(
+                SourceMetric(
+                    name=name,
+                    value=value,
+                    endpoint="API_GetGameProgression.php",
+                    captured_at=captured_at,
+                )
             )
-            for name, value in sorted(metrics_data.items())
-        )
+        metrics = tuple(sorted(metrics_list, key=lambda metric: metric.name))
         return CatalogRecord(record_id, raw, tuple(sorted(attributes)), media, metrics)
     except (KeyError, TypeError, ValueError) as exc:
         raise InvalidRecord("invalid_record") from exc

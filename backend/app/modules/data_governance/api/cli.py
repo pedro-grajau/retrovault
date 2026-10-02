@@ -210,11 +210,12 @@ def main(argv: list[str] | None = None) -> int:
                 if not isinstance(records, list):
                     raise PackageError("processing_summary_invalid")
                 for record in records:
-                    if not isinstance(record, dict) or not isinstance(
-                        record.get("record_id"), str
-                    ):
+                    if not isinstance(record, dict):
                         raise PackageError("processing_summary_invalid")
-                    record_id = str(record["record_id"])
+                    record_id_value = record.get("record_id")
+                    if not isinstance(record_id_value, str):
+                        raise PackageError("processing_summary_invalid")
+                    record_id = record_id_value
                     candidate = repository.review_candidate(
                         run_id,
                         record_id,
