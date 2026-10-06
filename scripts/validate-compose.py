@@ -12,7 +12,7 @@ requirements = {
     "API healthcheck": "/api/v1/health" in compose,
     "frontend healthcheck": "fetch('http://localhost:5173')" in compose,
     "migration on startup": "alembic upgrade head" in compose and "alembic upgrade head" in override,
-    "same development version": compose.count("${APP_VERSION:-dev}") == 2,
+    "same development version": compose.count("${APP_VERSION:-dev}") == 3,
     "deterministic frontend install": "bun install --frozen-lockfile" in compose,
     "healthcheck uses bundled Python": "urllib.request.urlopen" in compose,
 }
