@@ -240,6 +240,7 @@ def _offer(
         available_units=available_units,
         demo_rank=rank,
         sandbox=True,
+        sku_code=f"SKU-{game_id.hex[:8]}-{mode}",
     )
 
 
@@ -303,6 +304,7 @@ async def test_public_catalog_serializes_populated_sandbox_offers(monkeypatch) -
     assert payload["items"][0]["offers"] == [
         {
             "id": str(offer.id),
+            "sku_code": offer.sku_code,
             "mode": "purchase",
             "price_minor": 4990,
             "currency": "BRL",
@@ -310,6 +312,7 @@ async def test_public_catalog_serializes_populated_sandbox_offers(monkeypatch) -
             "available_units": 2,
             "demo_rank": 7,
             "sandbox": True,
+            "units": [],
         }
     ]
 
@@ -441,7 +444,7 @@ async def test_commerce_failure_hides_offers_or_rejects_availability_filter(monk
 @pytest.mark.anyio
 async def test_public_game_etag_and_unpublished_not_found(monkeypatch) -> None:
     game = _game()
-    monkeypatch.setattr(catalog_router, "_catalog", FakePublishedCatalog(game))
+    _wire_public_catalog(monkeypatch, FakePublishedCatalog(game))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(f"/api/v1/catalog/games/{game.id}")
@@ -453,7 +456,7 @@ async def test_public_game_etag_and_unpublished_not_found(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.headers["ETag"] == f'"{game.etag}"'
-    assert response.headers["Cache-Control"] == "public, max-age=60"
+    assert response.headers["Cache-Control"] == "public, max-age=30"
     assert cached.status_code == 304
     assert missing.status_code == 404
 
@@ -528,7 +531,7 @@ def test_catalog_openapi_documents_public_error_and_not_modified_responses() -> 
 @pytest.mark.anyio
 async def test_catalog_cors_allows_conditional_requests_and_exposes_etag(monkeypatch) -> None:
     game = _game()
-    monkeypatch.setattr(catalog_router, "_catalog", FakePublishedCatalog(game))
+    _wire_public_catalog(monkeypatch, FakePublishedCatalog(game))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         preflight = await client.options(

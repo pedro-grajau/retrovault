@@ -94,7 +94,7 @@ test("Home apresenta populares e plataformas com fatos Sandbox visíveis", async
   ).toBeVisible()
   await expect(page.getByText(/49,90/)).toBeVisible()
   const popularCard = page
-    .getByRole("article")
+    .getByRole("link")
     .filter({ has: page.getByRole("heading", { name: "Jogo popular" }) })
   await expect(
     popularCard
@@ -146,7 +146,7 @@ test("Catálogo sincroniza filtros com a URL e mostra ofertas nos resultados", a
   ).toBeVisible()
   await expect(page.getByText(/49,90/)).toBeVisible()
   const filteredCard = page
-    .getByRole("article")
+    .getByRole("link")
     .filter({ has: page.getByRole("heading", { name: "Jogo filtrado" }) })
   await expect(
     filteredCard
@@ -261,7 +261,7 @@ test("Busca do cabeçalho preserva termo e plataforma e mostra região e ediçã
   await expect(
     page.getByRole("heading", { name: "Resultados para “Pokemon-Stadium”" }),
   ).toBeVisible()
-  const result = page.getByRole("article", {
+  const result = page.getByRole("link", {
     name: "Pokemon Stadium, SNES",
   })
   await expect(result.getByText("SNES · Aventura")).toBeVisible()

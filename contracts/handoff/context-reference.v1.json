@@ -1,0 +1,34 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "purpose": "Referência curta e assinada para associar um Jogo publicado à conversa da Sessão na história 2.1.",
+  "reference": {
+    "format": "v1.<base64url-json>.<base64url-hmac-sha256>",
+    "claims": ["v", "game_id", "exp"],
+    "ttl_seconds_default": 1800,
+    "ttl_seconds_configurable": true,
+    "secret_config": "PIXEL_CONTEXT_REFERENCE_SECRET",
+    "secret_minimum_bytes": 32,
+    "allowed_context": ["published_game_id", "expiration"],
+    "forbidden_context": ["personal_data", "price", "visitor_parameters", "editorial_copy", "commerce_facts"],
+    "validation": ["signature", "version", "expiration", "game_still_published"],
+    "invalid_reference_result": "reject_without_associating_context"
+  },
+  "destination_config": "PIXEL_WHATSAPP_NUMBER",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/api/v1/concierge/context-references",
+      "request": {"game_id": "UUID|null"},
+      "response": ["reference", "expires_at", "whatsapp_url", "web_whatsapp_url"],
+      "notes": ["game_id omitted creates a generic Home entry with no game context", "WhatsApp opens only after a visitor follows a returned link"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/concierge/context-references/validate",
+      "request": {"reference": "signed-reference"},
+      "response": ["valid", "game_id", "expires_at"]
+    }
+  ]
+}

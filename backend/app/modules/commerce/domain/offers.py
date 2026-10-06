@@ -6,6 +6,15 @@ from uuid import UUID
 
 
 @dataclass(frozen=True)
+class PhysicalUnitFacts:
+    """Current, customer-facing facts recorded for one available unit."""
+
+    condition_summary: str
+    defects: tuple[str, ...] | None
+    included_items: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
 class Offer:
     id: UUID
     game_id: UUID
@@ -16,3 +25,5 @@ class Offer:
     available_units: int
     demo_rank: int
     sandbox: bool
+    sku_code: str = ""
+    units: tuple[PhysicalUnitFacts, ...] = ()

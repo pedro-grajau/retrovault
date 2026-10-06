@@ -7,6 +7,10 @@ from uuid import UUID
 from app.modules.catalog.domain.publication import PublishedGame
 
 
+class CatalogReadUnavailable(Exception):
+    """The published Catalog projection could not be read."""
+
+
 @dataclass(frozen=True)
 class PublishedSearchHit:
     """A published game and the search keyset position immediately after it."""

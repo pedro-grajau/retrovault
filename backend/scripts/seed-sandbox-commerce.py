@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -10,10 +11,82 @@ from sqlalchemy import create_engine, text
 from app.platform.config.settings import settings
 
 
+def _unit_facts(unit_number: int) -> tuple[str, list[str], list[str]]:
+    conditions = ("Muito bom", "Bom", "Aceitável")
+    defects = (
+        [],
+        ["Marcas superficiais demonstrativas no estojo."],
+        [],
+        ["Desgaste demonstrativo na etiqueta do cartucho."],
+    )[unit_number % 4]
+    included_items = (
+        ["Cartucho", "Manual demonstrativo"],
+        ["Cartucho"],
+        ["Cartucho", "Estojo"],
+    )[unit_number % 3]
+    return conditions[unit_number % len(conditions)], defects, included_items
+
+
+def _seed_units(
+    connection,
+    *,
+    game_id: UUID,
+    offer_id: UUID,
+    mode: str,
+    rank: int,
+    now: datetime,
+) -> None:
+    state = "unavailable" if rank % 5 == 0 else "available"
+    count = 1 + rank % 3
+    for unit_number in range(count):
+        unit_id: UUID = uuid5(
+            NAMESPACE_URL,
+            f"retrovault:sandbox:unit:{game_id}:{mode}:{unit_number}",
+        )
+        condition, defects, included_items = _unit_facts(unit_number)
+        connection.execute(text("""
+            INSERT INTO commerce.physical_units
+                (id, offer_id, state, condition_summary, defects,
+                 included_items, created_at)
+            VALUES (:unit_id, :offer_id, :state, :condition_summary,
+                    CAST(:defects AS jsonb), CAST(:included_items AS jsonb),
+                    :created_at)
+            ON CONFLICT (id) DO UPDATE
+            SET offer_id = EXCLUDED.offer_id,
+                state = EXCLUDED.state,
+                condition_summary = EXCLUDED.condition_summary,
+                defects = EXCLUDED.defects,
+                included_items = EXCLUDED.included_items
+        """), {
+            "unit_id": unit_id,
+            "offer_id": offer_id,
+            "state": state,
+            "condition_summary": condition,
+            "defects": json.dumps(defects),
+            "included_items": json.dumps(included_items),
+            "created_at": now,
+        })
+
+
 def main() -> None:
     now = datetime.now(UTC)
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     with engine.begin() as connection:
+        existing_offers = list(connection.execute(text("""
+            SELECT id, game_id, mode, demo_rank
+            FROM commerce.offers
+            ORDER BY game_id, mode
+        """)).mappings())
+        for offer in existing_offers:
+            _seed_units(
+                connection,
+                game_id=offer["game_id"],
+                offer_id=offer["id"],
+                mode=offer["mode"],
+                rank=offer["demo_rank"],
+                now=now,
+            )
+
         games = list(connection.execute(text("""
             SELECT id FROM catalog.published_games
             WHERE active
@@ -50,41 +123,35 @@ def main() -> None:
                 offer_id = uuid5(
                     NAMESPACE_URL, f"retrovault:sandbox:offer:{game_id}:{mode}"
                 )
-                state = "unavailable" if rank % 5 == 0 else "available"
-                count = 1 + rank % 3
+                sku_code = (
+                    f"RV-{game_id.hex.upper()}-{mode[0].upper()}"
+                )
                 connection.execute(text("""
                     INSERT INTO commerce.offers
                         (id, game_id, mode, price_minor, currency, condition_summary,
-                         demo_rank, sandbox, created_at)
+                         demo_rank, sandbox, sku_code, created_at)
                     VALUES (:id, :game_id, :mode, :price_minor, 'BRL',
-                            'Condição demonstrativa Sandbox; não representa uma unidade real.',
-                            :rank, true, :created_at)
-                    ON CONFLICT (game_id, mode) DO NOTHING
+                            'Consulte as condições de cada unidade demonstrativa.',
+                            :rank, true, :sku_code, :created_at)
+                    ON CONFLICT (game_id, mode) DO UPDATE
+                    SET sku_code = EXCLUDED.sku_code
                 """), {
                     "id": offer_id,
                     "game_id": game_id,
                     "mode": mode,
                     "price_minor": 4990 if mode == "purchase" else 990,
                     "rank": rank,
+                    "sku_code": sku_code,
                     "created_at": now,
                 })
-                for unit_number in range(count):
-                    unit_id: UUID = uuid5(
-                        NAMESPACE_URL,
-                        f"retrovault:sandbox:unit:{game_id}:{mode}:{unit_number}",
-                    )
-                    connection.execute(text("""
-                        INSERT INTO commerce.physical_units (id, offer_id, state, created_at)
-                        SELECT :unit_id, id, :state, :created_at
-                        FROM commerce.offers WHERE game_id = :game_id AND mode = :mode
-                        ON CONFLICT (id) DO NOTHING
-                    """), {
-                        "unit_id": unit_id,
-                        "game_id": game_id,
-                        "mode": mode,
-                        "state": state,
-                        "created_at": now,
-                    })
+                _seed_units(
+                    connection,
+                    game_id=game_id,
+                    offer_id=offer_id,
+                    mode=mode,
+                    rank=rank,
+                    now=now,
+                )
                 existing_modes.add((game_id, mode))
     engine.dispose()
 

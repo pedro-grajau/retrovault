@@ -354,11 +354,17 @@ h1 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .game-card {
+  display: block;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 0.8rem;
   background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+}
+.game-card:hover {
+  border-color: var(--primary);
 }
 .cover-wrap {
   position: relative;
@@ -636,6 +642,245 @@ h1 {
   margin-top: 1.5rem;
 }
 
+.pixel-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  margin-top: 2rem;
+  padding: 1.15rem 1.25rem;
+  border: 1px solid var(--line-functional);
+  border-radius: 0.85rem;
+  background: var(--surface);
+}
+.pixel-entry h2 {
+  margin: 0;
+  font-size: clamp(1.2rem, 2.4vw, 1.65rem);
+  line-height: 1.2;
+}
+.pixel-entry p:not(.eyebrow, .pixel-status) {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+.pixel-entry > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  max-width: 24rem;
+}
+.pixel-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+}
+.pixel-error {
+  color: var(--danger);
+}
+.pixel-links {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.pixel-links .button-secondary,
+.pixel-links .text-link {
+  min-height: 44px;
+}
+
+.detail-page {
+  width: min(1040px, calc(100% - 3rem));
+  padding-top: 2rem;
+}
+.game-detail {
+  min-width: 0;
+}
+.back-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-bottom: 1rem;
+  color: var(--primary);
+  font-weight: 800;
+  text-underline-offset: 0.2em;
+}
+.detail-overview {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.85fr) minmax(0, 1.15fr);
+  align-items: start;
+  gap: clamp(1.25rem, 4vw, 3rem);
+}
+.detail-cover {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: var(--surface-overlay);
+}
+.detail-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.detail-editorial {
+  min-width: 0;
+}
+.detail-editorial h1 {
+  margin: 0.25rem 0 0.65rem;
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+.detail-platform {
+  margin: 0;
+  color: var(--primary);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.detail-edition {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+}
+.detail-description {
+  margin: 1rem 0 0;
+  max-width: 62ch;
+  color: var(--muted);
+}
+.sandbox-note {
+  margin: 1.5rem 0 0;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--warning);
+  border-radius: 0.6rem;
+  color: var(--text);
+  background: var(--surface);
+}
+.sandbox-note strong {
+  color: var(--warning);
+}
+.detail-offers {
+  margin-top: 2rem;
+}
+.detail-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+.detail-section-heading .eyebrow {
+  margin-bottom: 0.2rem;
+}
+.detail-section-heading h2 {
+  margin: 0;
+  font-size: clamp(1.35rem, 3vw, 1.9rem);
+  line-height: 1.2;
+}
+.detail-offer-list {
+  display: grid;
+  gap: 1rem;
+}
+.detail-offer {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line-functional);
+  border-radius: 0.8rem;
+  background: var(--surface);
+}
+.offer-overview {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid var(--line);
+}
+.offer-overview h3 {
+  margin: 0.15rem 0 0;
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+.offer-overview .offer-mode {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+.detail-price {
+  color: var(--primary);
+  font-size: clamp(1.15rem, 2.5vw, 1.55rem);
+  white-space: nowrap;
+}
+.detail-offer > .availability {
+  margin: 0.6rem 0 0;
+}
+.physical-unit-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 0.75rem;
+  margin-top: 0.8rem;
+}
+.physical-unit {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  background: var(--bg);
+}
+.physical-unit h4 {
+  margin: 0 0 0.55rem;
+  font-size: 0.95rem;
+}
+.unit-facts {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+}
+.unit-fact {
+  min-width: 0;
+}
+.unit-fact dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.unit-fact dd {
+  margin: 0.1rem 0 0;
+  overflow-wrap: anywhere;
+}
+.detail-unavailable {
+  border-color: var(--warning);
+}
+.detail-unavailable p {
+  color: var(--text);
+}
+.detail-state {
+  display: grid;
+  gap: 1rem;
+  max-width: 760px;
+  margin-inline: auto;
+  padding: 1.25rem;
+  border: 1px solid var(--line-functional);
+  border-radius: 0.85rem;
+  background: var(--surface);
+}
+.detail-state h1,
+.detail-state p {
+  margin: 0;
+}
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.detail-actions a {
+  align-items: center;
+}
+
 footer {
   display: flex;
   min-height: 70px;
@@ -731,6 +976,30 @@ footer {
     grid-template-columns: minmax(0, 1fr);
     gap: 1.2rem;
   }
+  .detail-page {
+    width: min(100% - 2rem, 680px);
+    padding-top: 1.5rem;
+  }
+  .detail-overview {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.25rem;
+  }
+  .detail-cover {
+    width: min(100%, 500px);
+    aspect-ratio: 16 / 10;
+  }
+  .pixel-entry {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pixel-entry > button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+  .detail-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
   .filter-panel {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     column-gap: 0.75rem;
@@ -787,6 +1056,16 @@ footer {
   .offer-row .condition {
     grid-column: 1;
   }
+  .offer-overview {
+    flex-direction: column;
+  }
+  .detail-price {
+    white-space: normal;
+  }
+  .pixel-entry > button,
+  .detail-section-heading > button {
+    width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -808,6 +1087,11 @@ footer {
   .search-preview,
   .state-panel,
   .state-message,
+  .pixel-entry,
+  .detail-offer,
+  .physical-unit,
+  .sandbox-note,
+  .detail-state,
   .commerce-banner,
   .stale-note,
   .platform-chip,

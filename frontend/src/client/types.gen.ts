@@ -27,6 +27,66 @@ export type AttributeOrigin = {
 };
 
 /**
+ * ContextReferenceRequest
+ */
+export type ContextReferenceRequest = {
+    /**
+     * Game Id
+     */
+    game_id?: string | null;
+};
+
+/**
+ * ContextReferenceResponse
+ */
+export type ContextReferenceResponse = {
+    /**
+     * Expires At
+     */
+    expires_at: string | null;
+    /**
+     * Reference
+     */
+    reference: string | null;
+    /**
+     * Web Whatsapp Url
+     */
+    web_whatsapp_url: string;
+    /**
+     * Whatsapp Url
+     */
+    whatsapp_url: string;
+};
+
+/**
+ * ContextReferenceValidationRequest
+ */
+export type ContextReferenceValidationRequest = {
+    /**
+     * Reference
+     */
+    reference: string;
+};
+
+/**
+ * ContextReferenceValidationResponse
+ */
+export type ContextReferenceValidationResponse = {
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Game Id
+     */
+    game_id: string;
+    /**
+     * Valid
+     */
+    valid: true;
+};
+
+/**
  * GameAttributes
  */
 export type GameAttributes = {
@@ -122,6 +182,10 @@ export type GameListResponse = {
 export type GameResponse = {
     attributes: GameAttributes;
     /**
+     * Commerce Status
+     */
+    commerce_status: 'available' | 'unavailable';
+    /**
      * Cover Attribution
      */
     cover_attribution: string;
@@ -215,6 +279,32 @@ export type OfferResponse = {
      * Sandbox
      */
     sandbox: boolean;
+    /**
+     * Sku Code
+     */
+    sku_code: string;
+    /**
+     * Units
+     */
+    units: Array<PhysicalUnitResponse>;
+};
+
+/**
+ * PhysicalUnitResponse
+ */
+export type PhysicalUnitResponse = {
+    /**
+     * Condition Summary
+     */
+    condition_summary: string;
+    /**
+     * Defects
+     */
+    defects?: Array<string> | null;
+    /**
+     * Included Items
+     */
+    included_items?: Array<string> | null;
 };
 
 /**
@@ -360,6 +450,10 @@ export type getGameApiV1CatalogGamesGameIdGetErrors = {
      * Validation Error
      */
     422: HTTPValidationError;
+    /**
+     * Catalog unavailable.
+     */
+    503: unknown;
 };
 
 export type getGameApiV1CatalogGamesGameIdGetError = getGameApiV1CatalogGamesGameIdGetErrors[keyof getGameApiV1CatalogGamesGameIdGetErrors];
@@ -420,6 +514,72 @@ export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses = {
 };
 
 export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponse = getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses[keyof getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses];
+
+export type createContextReferenceApiV1ConciergeContextReferencesPostData = {
+    body: ContextReferenceRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/concierge/context-references';
+};
+
+export type createContextReferenceApiV1ConciergeContextReferencesPostErrors = {
+    /**
+     * Jogo publicado não encontrado.
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+    /**
+     * WhatsApp, assinatura ou Catálogo indisponível.
+     */
+    503: unknown;
+};
+
+export type createContextReferenceApiV1ConciergeContextReferencesPostError = createContextReferenceApiV1ConciergeContextReferencesPostErrors[keyof createContextReferenceApiV1ConciergeContextReferencesPostErrors];
+
+export type createContextReferenceApiV1ConciergeContextReferencesPostResponses = {
+    /**
+     * Successful Response
+     */
+    201: ContextReferenceResponse;
+};
+
+export type createContextReferenceApiV1ConciergeContextReferencesPostResponse = createContextReferenceApiV1ConciergeContextReferencesPostResponses[keyof createContextReferenceApiV1ConciergeContextReferencesPostResponses];
+
+export type validateContextReferenceApiV1ConciergeContextReferencesValidatePostData = {
+    body: ContextReferenceValidationRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/concierge/context-references/validate';
+};
+
+export type validateContextReferenceApiV1ConciergeContextReferencesValidatePostErrors = {
+    /**
+     * Referência inválida, expirada ou sem jogo publicado.
+     */
+    400: unknown;
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+    /**
+     * Validação ou Catálogo indisponível.
+     */
+    503: unknown;
+};
+
+export type validateContextReferenceApiV1ConciergeContextReferencesValidatePostError = validateContextReferenceApiV1ConciergeContextReferencesValidatePostErrors[keyof validateContextReferenceApiV1ConciergeContextReferencesValidatePostErrors];
+
+export type validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponses = {
+    /**
+     * Successful Response
+     */
+    200: ContextReferenceValidationResponse;
+};
+
+export type validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponse = validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponses[keyof validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponses];
 
 export type healthApiV1HealthGetData = {
     body?: never;

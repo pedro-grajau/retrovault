@@ -7,7 +7,7 @@ import type {
 const apiBase = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "")
 const cachePrefix = "retrovault:published-catalog:"
 
-export type EditorialGame = Omit<GameResponse, "offers">
+export type EditorialGame = Omit<GameResponse, "offers" | "commerce_status">
 export type CatalogSnapshot = {
   items: EditorialGame[]
   savedAt: string
@@ -17,21 +17,86 @@ export function apiUrl(path: string): string {
   return `${apiBase}${path}`
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+export class CatalogApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
+}
+
+async function getJson<T>(
+  path: string,
+  signal?: AbortSignal,
+  cache?: RequestCache,
+): Promise<T> {
   const controller = new AbortController()
   const abortFromCaller = () => controller.abort()
   if (signal?.aborted) controller.abort()
   else signal?.addEventListener("abort", abortFromCaller, { once: true })
   const timeout = window.setTimeout(() => controller.abort(), 10_000)
   try {
-    const response = await fetch(apiUrl(path), { signal: controller.signal })
+    const response = await fetch(apiUrl(path), {
+      signal: controller.signal,
+      cache,
+    })
     if (!response.ok) {
-      throw new Error(`catalog_request_${response.status}`)
+      throw new CatalogApiError(
+        `catalog_request_${response.status}`,
+        response.status,
+      )
     }
     return (await response.json()) as T
   } finally {
     window.clearTimeout(timeout)
     signal?.removeEventListener("abort", abortFromCaller)
+  }
+}
+
+export function getGameDetails(
+  gameId: string,
+  signal?: AbortSignal,
+): Promise<GameResponse> {
+  return getJson<GameResponse>(
+    `/api/v1/catalog/games/${encodeURIComponent(gameId)}`,
+    signal,
+    "no-store",
+  )
+}
+
+export type PixelEntryResponse = {
+  reference: string | null
+  expires_at: string | null
+  whatsapp_url: string
+  web_whatsapp_url: string
+}
+
+export async function createPixelEntry(
+  gameId?: string,
+): Promise<PixelEntryResponse> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch(
+      apiUrl("/api/v1/concierge/context-references"),
+      {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(gameId ? { game_id: gameId } : {}),
+        signal: controller.signal,
+      },
+    )
+    if (!response.ok) {
+      throw new CatalogApiError(
+        `pixel_entry_request_${response.status}`,
+        response.status,
+      )
+    }
+    return (await response.json()) as PixelEntryResponse
+  } finally {
+    window.clearTimeout(timeout)
   }
 }
 
@@ -67,9 +132,10 @@ export function getCatalogFacets(
 }
 
 function editorialOnly(game: GameResponse): EditorialGame {
-  const copy = { ...game }
-  delete copy.offers
-  return copy
+  const { offers, commerce_status, ...editorial } = game
+  void offers
+  void commerce_status
+  return editorial
 }
 
 export function writeCatalogSnapshot(key: string, games: GameResponse[]): void {

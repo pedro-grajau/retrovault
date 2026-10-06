@@ -14,6 +14,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.catalog.domain.publication import (
     GameNotFound,
@@ -21,7 +22,10 @@ from app.modules.catalog.domain.publication import (
     PublicationConflict,
     PublishedGame,
 )
-from app.modules.catalog.ports.repository import PublishedSearchHit
+from app.modules.catalog.ports.repository import (
+    CatalogReadUnavailable,
+    PublishedSearchHit,
+)
 
 _EDITORIAL_FIELDS = {
     "title", "platform", "region", "edition", "genre", "developer",
@@ -393,18 +397,21 @@ class PostgresCatalogRepository:
         return hits, next_cursor
 
     def get_game(self, game_id: UUID) -> PublishedGame | None:
-        with self.engine.connect() as connection:
-            row = connection.execute(
-                text("""
-                    SELECT g.id, g.title, g.platform, g.editorial, g.source,
-                           g.source_record_id, g.version, g.etag, g.updated_at AS verified_at,
-                           g.cover_hash, m.content_type, m.attribution
-                    FROM catalog.published_games g
-                    JOIN catalog.published_media m ON m.content_hash = g.cover_hash
-                    WHERE g.id=:id AND g.active
-                """),
-                {"id": game_id},
-            ).mappings().first()
+        try:
+            with self.engine.connect() as connection:
+                row = connection.execute(
+                    text("""
+                        SELECT g.id, g.title, g.platform, g.editorial, g.source,
+                               g.source_record_id, g.version, g.etag, g.updated_at AS verified_at,
+                               g.cover_hash, m.content_type, m.attribution
+                        FROM catalog.published_games g
+                        JOIN catalog.published_media m ON m.content_hash = g.cover_hash
+                        WHERE g.id=:id AND g.active
+                    """),
+                    {"id": game_id},
+                ).mappings().first()
+        except SQLAlchemyError as exc:
+            raise CatalogReadUnavailable from exc
         return self._row_game(row) if row else None
 
     def get_cover(self, game_id: UUID) -> tuple[bytes, str, str] | None:
