@@ -49,6 +49,8 @@ def test_endpoint_matrix_matches_the_foundation_and_published_catalog_api() -> N
         ("GET", "/api/v1/catalog/games"),
         ("GET", "/api/v1/catalog/games/{game_id}"),
         ("GET", "/api/v1/catalog/games/{game_id}/box-art"),
+        ("POST", "/api/v1/concierge/context-references"),
+        ("POST", "/api/v1/concierge/context-references/validate"),
     }
     openapi_endpoints = {
         (method.upper(), path)

@@ -4,9 +4,12 @@ import ReactDOM from "react-dom/client"
 import type { EditorialGame } from "./catalog/api"
 import {
   apiUrl,
+  CatalogApiError,
   catalogSnapshotKey,
+  createPixelEntry,
   getCatalogFacets,
   getCatalogPage,
+  getGameDetails,
   getPopularGames,
   readCatalogSnapshot,
   writeCatalogSnapshot,
@@ -122,9 +125,10 @@ function GameCard({
 }) {
   const genre = game.attributes.genre
   return (
-    <article
+    <a
       className="game-card"
       aria-label={`${game.title}, ${game.platform}`}
+      href={`/games/${game.id}`}
     >
       <div className="cover-wrap">
         <img
@@ -154,7 +158,133 @@ function GameCard({
           commerceUnavailable={commerceUnavailable}
         />
       </div>
-    </article>
+    </a>
+  )
+}
+
+function PixelEntry({ gameId }: { gameId?: string }) {
+  const [loading, setLoading] = useState(false)
+  const [entry, setEntry] = useState<Awaited<
+    ReturnType<typeof createPixelEntry>
+  > | null>(null)
+  const [message, setMessage] = useState("")
+  const [error, setError] = useState(false)
+  const headingId = gameId ? "pixel-game-title" : "pixel-home-title"
+
+  useEffect(() => {
+    if (!entry?.expires_at) return
+    const expiresAt = Date.parse(entry.expires_at)
+    if (!Number.isFinite(expiresAt)) return
+    const delay = expiresAt - Date.now()
+    if (delay <= 0) {
+      setEntry(null)
+      setError(true)
+      setMessage(
+        "A referência expirou. Prepare uma nova conversa para continuar.",
+      )
+      return
+    }
+    const timeout = window.setTimeout(() => {
+      setEntry(null)
+      setError(true)
+      setMessage(
+        "A referência expirou. Prepare uma nova conversa para continuar.",
+      )
+    }, delay)
+    return () => window.clearTimeout(timeout)
+  }, [entry])
+
+  async function prepareEntry() {
+    setLoading(true)
+    setEntry(null)
+    setError(false)
+    setMessage("Preparando a conversa com Pixel.")
+    try {
+      const nextEntry = await createPixelEntry(gameId)
+      setEntry(nextEntry)
+      setMessage(
+        nextEntry.reference
+          ? "Contexto do jogo preparado. Escolha como abrir o WhatsApp."
+          : "Conversa preparada. Escolha como abrir o WhatsApp.",
+      )
+    } catch (cause) {
+      const unavailable =
+        cause instanceof CatalogApiError && cause.status === 503
+      setError(true)
+      setMessage(
+        unavailable
+          ? "A conversa com Pixel está indisponível agora. Tente novamente mais tarde."
+          : cause instanceof CatalogApiError && cause.status === 404
+            ? "Este jogo não está mais publicado. Volte ao catálogo para escolher outro."
+            : "Não foi possível preparar a conversa. Seu contexto continua nesta página; tente novamente.",
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <section className="pixel-entry" aria-labelledby={headingId}>
+      <div>
+        <p className="eyebrow">ATENDIMENTO NO WHATSAPP</p>
+        <h2 id={headingId}>Converse com Pixel</h2>
+        <p>
+          {gameId
+            ? "Tire dúvidas sobre este jogo com o contexto já preparado."
+            : "Peça ajuda para encontrar um jogo no acervo publicado."}
+        </p>
+      </div>
+      <button
+        className="button-primary"
+        type="button"
+        onClick={prepareEntry}
+        disabled={loading}
+      >
+        Preparar conversa com Pixel
+      </button>
+      {message && (
+        <p
+          className={error ? "pixel-status pixel-error" : "pixel-status"}
+          role={error ? "alert" : "status"}
+          aria-live={error ? "assertive" : "polite"}
+        >
+          {message}
+        </p>
+      )}
+      {entry && (
+        <fieldset className="pixel-links">
+          <legend className="visually-hidden">
+            Opções para abrir a conversa
+          </legend>
+          <a
+            className="button-secondary"
+            href={entry.whatsapp_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Continuar no WhatsApp
+          </a>
+          <a
+            className="text-link"
+            href={entry.web_whatsapp_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Usar WhatsApp Web (abre uma nova guia)
+          </a>
+        </fieldset>
+      )}
+      {error && (
+        <button
+          className="button-secondary"
+          type="button"
+          onClick={prepareEntry}
+          disabled={loading}
+        >
+          Tentar novamente
+        </button>
+      )}
+    </section>
   )
 }
 
@@ -166,13 +296,21 @@ function HomePage() {
   )
   const [platforms, setPlatforms] = useState<string[]>([])
   const [facetsState, setFacetsState] = useState<LoadState>("loading")
+  const homeRequestSequence = useRef(0)
+  const homeController = useRef<AbortController | null>(null)
 
   const loadHome = useCallback(() => {
+    const sequence = ++homeRequestSequence.current
+    homeController.current?.abort()
     const controller = new AbortController()
+    homeController.current = controller
+    const isCurrent = () =>
+      sequence === homeRequestSequence.current && !controller.signal.aborted
     setPopularState("loading")
     setPopularMessage("Carregando jogos populares disponíveis.")
     void getPopularGames(controller.signal)
       .then((page) => {
+        if (!isCurrent()) return
         setPopular(page.items)
         setPopularState("ready")
         setPopularMessage(
@@ -182,6 +320,7 @@ function HomePage() {
         )
       })
       .catch(() => {
+        if (!isCurrent()) return
         setPopular([])
         setPopularState("error")
         setPopularMessage(
@@ -191,17 +330,25 @@ function HomePage() {
     setFacetsState("loading")
     void getCatalogFacets(controller.signal)
       .then((facets) => {
+        if (!isCurrent()) return
         setPlatforms(facets.platforms)
         setFacetsState("ready")
       })
       .catch(() => {
+        if (!isCurrent()) return
         setPlatforms([])
         setFacetsState("error")
       })
-    return () => controller.abort()
   }, [])
 
-  useEffect(() => loadHome(), [loadHome])
+  useEffect(() => {
+    loadHome()
+    return () => {
+      homeRequestSequence.current += 1
+      homeController.current?.abort()
+      homeController.current = null
+    }
+  }, [loadHome])
 
   return (
     <main id="content" className="home-page">
@@ -277,6 +424,8 @@ function HomePage() {
         </p>
       </section>
 
+      <PixelEntry />
+
       <section className="home-platforms" aria-labelledby="platform-title">
         <div className="section-heading compact-heading">
           <div>
@@ -315,6 +464,335 @@ function HomePage() {
           </p>
         )}
       </section>
+    </main>
+  )
+}
+
+function GameOffers({
+  game,
+  refreshing,
+  refreshError,
+  onRefresh,
+}: {
+  game: GameResponse
+  refreshing: boolean
+  refreshError: boolean
+  onRefresh: () => void
+}) {
+  const offers = game.offers ?? []
+  const availableOffers = offers.filter((offer) => offer.available_units > 0)
+
+  return (
+    <section className="detail-offers" aria-labelledby="offer-title">
+      <div className="detail-section-heading">
+        <div>
+          <p className="eyebrow">COMMERCE · DADOS ATUAIS</p>
+          <h2 id="offer-title">Ofertas e unidades físicas</h2>
+        </div>
+        <button
+          className="button-secondary"
+          type="button"
+          onClick={onRefresh}
+          disabled={refreshing}
+          aria-busy={refreshing}
+        >
+          Atualizar disponibilidade
+        </button>
+      </div>
+
+      {refreshError || game.commerce_status === "unavailable" ? (
+        <div className="commerce-banner" role="status">
+          <strong>
+            {refreshError
+              ? "Não foi possível atualizar os detalhes do jogo."
+              : "Dados comerciais indisponíveis."}
+          </strong>{" "}
+          Não é possível confirmar condição, preço ou disponibilidade agora.
+          Tente atualizar mais tarde.
+        </div>
+      ) : availableOffers.length === 0 ? (
+        <div className="state-panel detail-unavailable" role="status">
+          <p>
+            Nenhuma unidade física está disponível agora. Não há compra ou
+            aluguel para iniciar.
+          </p>
+        </div>
+      ) : (
+        <div className="detail-offer-list">
+          {offers.map((offer) => (
+            <article className="detail-offer" key={offer.id}>
+              <div className="offer-overview">
+                <div>
+                  <p className="offer-mode">
+                    {modeLabel(offer.mode)}
+                    {offer.sandbox ? " · Sandbox" : ""}
+                  </p>
+                  <h3>{offer.sku_code ? `SKU ${offer.sku_code}` : "SKU"}</h3>
+                </div>
+                <strong className="detail-price">{formatPrice(offer)}</strong>
+              </div>
+              <p
+                className={
+                  offer.available_units > 0
+                    ? "availability available"
+                    : "availability unavailable"
+                }
+              >
+                {offer.available_units > 0
+                  ? `${offer.available_units} ${
+                      offer.available_units === 1
+                        ? "unidade disponível"
+                        : "unidades disponíveis"
+                    }`
+                  : "Indisponível no momento"}
+              </p>
+              {offer.units.length > 0 ? (
+                <div className="physical-unit-list">
+                  {offer.units.map((unit, index) => (
+                    <section
+                      className="physical-unit"
+                      key={`${offer.id}-${index}`}
+                    >
+                      <h4>Unidade física {index + 1}</h4>
+                      <dl className="unit-facts">
+                        <div className="unit-fact">
+                          <dt>Condição</dt>
+                          <dd>
+                            {unit.condition_summary.trim() || "Não informado"}
+                          </dd>
+                        </div>
+                        <div className="unit-fact">
+                          <dt>Defeitos conhecidos</dt>
+                          <dd>
+                            {unit.defects == null
+                              ? "Não informado"
+                              : unit.defects.length
+                                ? unit.defects.join("; ")
+                                : "Nenhum defeito conhecido registrado"}
+                          </dd>
+                        </div>
+                        <div className="unit-fact">
+                          <dt>Itens inclusos</dt>
+                          <dd>
+                            {unit.included_items == null
+                              ? "Não informado"
+                              : unit.included_items.length
+                                ? unit.included_items.join(", ")
+                                : "Nenhum item adicional registrado"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </section>
+                  ))}
+                </div>
+              ) : offer.available_units > 0 ? (
+                <div className="physical-unit-list">
+                  <section className="physical-unit">
+                    <h4>Detalhes da unidade</h4>
+                    <dl className="unit-facts">
+                      <div className="unit-fact">
+                        <dt>Condição</dt>
+                        <dd>{offer.condition_summary || "Não informado"}</dd>
+                      </div>
+                      <div className="unit-fact">
+                        <dt>Defeitos conhecidos</dt>
+                        <dd>Não informado</dd>
+                      </div>
+                      <div className="unit-fact">
+                        <dt>Itens inclusos</dt>
+                        <dd>Não informado</dd>
+                      </div>
+                    </dl>
+                  </section>
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function GameDetailPage({ gameId }: { gameId: string }) {
+  const [game, setGame] = useState<GameResponse | null>(null)
+  const gameRef = useRef<GameResponse | null>(null)
+  const refreshSequence = useRef(0)
+  const [pageState, setPageState] = useState<
+    "loading" | "ready" | "error" | "missing"
+  >("loading")
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState(false)
+  const [announcement, setAnnouncement] = useState("")
+
+  const refresh = useCallback(
+    async (signal?: AbortSignal) => {
+      const sequence = ++refreshSequence.current
+      setRefreshing(true)
+      try {
+        const nextGame = await getGameDetails(gameId, signal)
+        if (signal?.aborted || sequence !== refreshSequence.current) return
+        setRefreshError(false)
+        const previous = gameRef.current
+        const previousCommerce = previous
+          ? JSON.stringify({
+              status: previous.commerce_status,
+              offers: previous.offers,
+            })
+          : null
+        const nextCommerce = JSON.stringify({
+          status: nextGame.commerce_status,
+          offers: nextGame.offers,
+        })
+        gameRef.current = nextGame
+        setGame(nextGame)
+        setPageState("ready")
+        setAnnouncement(
+          previousCommerce !== null && previousCommerce !== nextCommerce
+            ? "As condições comerciais deste jogo foram atualizadas."
+            : "",
+        )
+      } catch (cause) {
+        if (signal?.aborted || sequence !== refreshSequence.current) return
+        if (cause instanceof CatalogApiError && cause.status === 404) {
+          setRefreshError(false)
+          gameRef.current = null
+          setGame(null)
+          setPageState("missing")
+          setAnnouncement("Este jogo não está mais publicado.")
+        } else if (gameRef.current) {
+          setRefreshError(true)
+          const withoutCommercialFacts: GameResponse = {
+            ...gameRef.current,
+            commerce_status: "unavailable",
+            offers: undefined,
+          }
+          gameRef.current = withoutCommercialFacts
+          setGame(withoutCommercialFacts)
+          setAnnouncement(
+            "Não foi possível atualizar os detalhes do jogo. Preço e disponibilidade foram ocultados até uma nova consulta.",
+          )
+        } else {
+          setPageState("error")
+          setAnnouncement(
+            "Não foi possível carregar os detalhes do jogo. Verifique sua conexão e tente novamente.",
+          )
+        }
+      } finally {
+        if (sequence === refreshSequence.current) setRefreshing(false)
+      }
+    },
+    [gameId],
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void refresh(controller.signal)
+    const interval = window.setInterval(() => void refresh(), 30_000)
+    return () => {
+      refreshSequence.current += 1
+      controller.abort()
+      window.clearInterval(interval)
+    }
+  }, [refresh])
+
+  if (pageState === "loading") {
+    return (
+      <main id="content" className="detail-page">
+        <section
+          className="state-message"
+          aria-label="Detalhes do jogo"
+          aria-busy="true"
+          role="status"
+        >
+          Carregando os detalhes do jogo publicado…
+        </section>
+      </main>
+    )
+  }
+
+  if (pageState === "error" || pageState === "missing" || !game) {
+    return (
+      <main id="content" className="detail-page">
+        <section className="detail-state" aria-labelledby="detail-error-title">
+          <p className="eyebrow">VISÃO GERAL DO JOGO</p>
+          <h1 id="detail-error-title">
+            {pageState === "missing"
+              ? "Jogo não encontrado."
+              : "Não foi possível carregar."}
+          </h1>
+          <p role={pageState === "missing" ? "status" : "alert"}>
+            {announcement || "Tente novamente ou volte ao catálogo publicado."}
+          </p>
+          <div className="detail-actions">
+            <button
+              className="button-secondary"
+              type="button"
+              onClick={() => void refresh()}
+              disabled={refreshing}
+            >
+              {refreshing ? "Carregando…" : "Tentar novamente"}
+            </button>
+            <a className="button-primary" href="/catalog">
+              Voltar ao catálogo
+            </a>
+          </div>
+          <PixelEntry />
+        </section>
+      </main>
+    )
+  }
+
+  const region = game.attributes.region
+  const edition = game.attributes.edition
+  const description = game.attributes.description
+
+  return (
+    <main id="content" className="detail-page">
+      <article className="game-detail" aria-labelledby="game-detail-title">
+        <a className="back-link" href="/catalog">
+          ← Voltar ao catálogo
+        </a>
+        <div className="detail-overview">
+          <div className="detail-cover">
+            <img src={apiUrl(game.cover_url)} alt={`Capa de ${game.title}`} />
+            <span className="published-badge">Jogo publicado</span>
+          </div>
+          <section
+            className="detail-editorial"
+            aria-label="Dados editoriais do jogo"
+          >
+            <p className="eyebrow">JOGO PUBLICADO · CATÁLOGO</p>
+            <h1 id="game-detail-title">{game.title}</h1>
+            <p className="detail-platform">{game.platform}</p>
+            {(region || edition) && (
+              <p className="detail-edition">
+                {region ? `Região: ${region}` : ""}
+                {region && edition ? " · " : ""}
+                {edition ? `Edição: ${edition}` : ""}
+              </p>
+            )}
+            <p className="detail-description">
+              {description || "Descrição editorial não informada."}
+            </p>
+          </section>
+        </div>
+
+        <p className="sandbox-note">
+          <strong>Sandbox.</strong> Valores e disponibilidades são
+          demonstrativos e podem mudar.
+        </p>
+        <p className="visually-hidden" role="status" aria-live="polite">
+          {refreshing ? "Atualizando os dados comerciais." : announcement}
+        </p>
+        <GameOffers
+          game={game}
+          refreshing={refreshing}
+          refreshError={refreshError}
+          onRefresh={() => void refresh()}
+        />
+        <PixelEntry gameId={game.id} />
+      </article>
     </main>
   )
 }
@@ -452,7 +930,10 @@ function CatalogPage() {
           const snapshot = readCatalogSnapshot(catalogSnapshotKey(query))
           if (snapshot?.items.length) {
             setCatalog({
-              games: snapshot.items,
+              games: snapshot.items.map((item) => ({
+                ...item,
+                commerce_status: "unavailable",
+              })),
               nextCursor: null,
               state: "ready",
               commerceUnavailable: true,
@@ -784,7 +1265,24 @@ function CatalogPage() {
 function App() {
   const version = useVersion()
   const path = useLocationPath()
-  const page = path === "/catalog" ? <CatalogPage /> : <HomePage />
+  const detailMatch = path.match(/^\/games\/([^/]+)$/)
+  const page =
+    path === "/catalog" ? (
+      <CatalogPage />
+    ) : detailMatch ? (
+      <GameDetailPage gameId={detailMatch[1]} />
+    ) : path === "/" ? (
+      <HomePage />
+    ) : (
+      <main id="content" className="detail-page">
+        <section className="detail-state" aria-labelledby="not-found-title">
+          <h1 id="not-found-title">Página não encontrada.</h1>
+          <a className="button-primary" href="/catalog">
+            Abrir catálogo
+          </a>
+        </section>
+      </main>
+    )
   const [headerSearch, setHeaderSearch] = useState("")
   const [headerSearchError, setHeaderSearchError] = useState("")
 

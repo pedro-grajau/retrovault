@@ -36,6 +36,110 @@
         "title": "AttributeOrigin",
         "type": "object"
       },
+      "ContextReferenceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "game_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Id"
+          }
+        },
+        "title": "ContextReferenceRequest",
+        "type": "object"
+      },
+      "ContextReferenceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "web_whatsapp_url": {
+            "title": "Web Whatsapp Url",
+            "type": "string"
+          },
+          "whatsapp_url": {
+            "title": "Whatsapp Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference",
+          "expires_at",
+          "whatsapp_url",
+          "web_whatsapp_url"
+        ],
+        "title": "ContextReferenceResponse",
+        "type": "object"
+      },
+      "ContextReferenceValidationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reference": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "title": "ContextReferenceValidationRequest",
+        "type": "object"
+      },
+      "ContextReferenceValidationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "game_id": {
+            "format": "uuid",
+            "title": "Game Id",
+            "type": "string"
+          },
+          "valid": {
+            "const": true,
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "game_id",
+          "expires_at"
+        ],
+        "title": "ContextReferenceValidationResponse",
+        "type": "object"
+      },
       "GameAttributes": {
         "additionalProperties": false,
         "properties": {
@@ -261,6 +365,14 @@
           "attributes": {
             "$ref": "#/components/schemas/GameAttributes"
           },
+          "commerce_status": {
+            "enum": [
+              "available",
+              "unavailable"
+            ],
+            "title": "Commerce Status",
+            "type": "string"
+          },
           "cover_attribution": {
             "title": "Cover Attribution",
             "type": "string"
@@ -331,7 +443,8 @@
           "version",
           "verified_at",
           "cover_attribution",
-          "cover_url"
+          "cover_url",
+          "commerce_status"
         ],
         "title": "GameResponse",
         "type": "object"
@@ -389,19 +502,74 @@
           "sandbox": {
             "title": "Sandbox",
             "type": "boolean"
+          },
+          "sku_code": {
+            "title": "Sku Code",
+            "type": "string"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicalUnitResponse"
+            },
+            "title": "Units",
+            "type": "array"
           }
         },
         "required": [
           "id",
+          "sku_code",
           "mode",
           "price_minor",
           "currency",
           "condition_summary",
           "available_units",
           "demo_rank",
-          "sandbox"
+          "sandbox",
+          "units"
         ],
         "title": "OfferResponse",
+        "type": "object"
+      },
+      "PhysicalUnitResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "condition_summary": {
+            "title": "Condition Summary",
+            "type": "string"
+          },
+          "defects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defects"
+          },
+          "included_items": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Items"
+          }
+        },
+        "required": [
+          "condition_summary"
+        ],
+        "title": "PhysicalUnitResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -484,6 +652,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "503": {
+            "description": "Catalog unavailable."
           }
         },
         "summary": "List Facets",
@@ -636,7 +807,7 @@
             "description": "Validation Error"
           },
           "503": {
-            "description": "Commerce indispon\u00edvel."
+            "description": "Commerce or Catalog unavailable."
           }
         },
         "summary": "List Games",
@@ -728,6 +899,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Catalog unavailable."
           }
         },
         "summary": "Get Game",
@@ -832,11 +1006,108 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Catalog unavailable."
           }
         },
         "summary": "Get Box Art",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/v1/concierge/context-references": {
+      "post": {
+        "operationId": "create_context_reference_api_v1_concierge_context_references_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextReferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextReferenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Jogo publicado n\u00e3o encontrado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "WhatsApp, assinatura ou Cat\u00e1logo indispon\u00edvel."
+          }
+        },
+        "summary": "Create Context Reference",
+        "tags": [
+          "concierge"
+        ]
+      }
+    },
+    "/api/v1/concierge/context-references/validate": {
+      "post": {
+        "operationId": "validate_context_reference_api_v1_concierge_context_references_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextReferenceValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextReferenceValidationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Refer\u00eancia inv\u00e1lida, expirada ou sem jogo publicado."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Valida\u00e7\u00e3o ou Cat\u00e1logo indispon\u00edvel."
+          }
+        },
+        "summary": "Validate Context Reference",
+        "tags": [
+          "concierge"
         ]
       }
     },

@@ -19,6 +19,21 @@ def strict_json_loads(raw: str | bytes) -> Any:
     return json.loads(raw, object_pairs_hook=unique_object)
 
 
+def contains_invalid_postgres_text(value: Any) -> bool:
+    """Reject text PostgreSQL cannot represent, including nested JSON values."""
+    if isinstance(value, str):
+        return "\x00" in value or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
+    if isinstance(value, dict):
+        return any(
+            contains_invalid_postgres_text(key)
+            or contains_invalid_postgres_text(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(contains_invalid_postgres_text(item) for item in value)
+    return False
+
+
 PROGRESSION_METRIC_FIELDS = frozenset(
     {
         "NumDistinctPlayers",

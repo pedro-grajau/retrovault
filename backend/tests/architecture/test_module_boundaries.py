@@ -60,3 +60,28 @@ def test_domain_layers_do_not_depend_on_frameworks_or_adapters() -> None:
                 if parts[0] in forbidden_roots or "adapters" in parts:
                     violations.append(f"{path}: {name}")
     assert not violations, "Domain dependency violations:\n" + "\n".join(violations)
+
+
+def test_application_layers_do_not_depend_on_adapters_or_frameworks() -> None:
+    forbidden_roots = {"fastapi", "pydantic", "sqlalchemy", "sqlmodel"}
+    violations: list[str] = []
+    for path in ROOT.glob("*/application/**/*.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            imported: list[str] = []
+            if isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported = [node.module]
+            for name in imported:
+                parts = name.split(".")
+                if parts[0] in forbidden_roots or "adapters" in parts:
+                    violations.append(f"{path}: {name}")
+    assert not violations, "Application dependency violations:\n" + "\n".join(violations)
+
+
+def test_editorial_allowlists_match_between_review_and_publication() -> None:
+    from app.modules.catalog.adapters.postgres_repository import _EDITORIAL_FIELDS
+    from app.modules.data_governance.adapters.postgres_repository import EDITABLE_FIELDS
+
+    assert EDITABLE_FIELDS == _EDITORIAL_FIELDS

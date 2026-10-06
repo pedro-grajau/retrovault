@@ -37,6 +37,14 @@ compose run --rm --no-deps \
 
 compose run --rm --no-deps \
   --volume "$PWD/backend/tests:/app/backend/tests:ro" \
+  --env RUN_DB_TESTS=1 \
+  backend pytest \
+    tests/data_governance/test_migration_0005_backfill.py \
+    tests/data_governance/test_migration_0014_closeout.py \
+    -q
+
+compose run --rm --no-deps \
+  --volume "$PWD/backend/tests:/app/backend/tests:ro" \
   --volume "$PWD/fixtures:/app/fixtures:ro" \
   --env RUN_DB_TESTS=1 \
   backend pytest \

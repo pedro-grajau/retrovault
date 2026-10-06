@@ -30,11 +30,18 @@ async def test_correlation_id_is_preserved() -> None:
 
 
 @pytest.mark.anyio
-async def test_frontend_origin_is_allowed_to_read_correlation_header() -> None:
+@pytest.mark.parametrize(
+    "origin", ["http://localhost:5173", "http://127.0.0.1:4173"]
+)
+async def test_frontend_origins_are_allowed_to_read_correlation_header(
+    origin: str,
+) -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/system/version", headers={"Origin": "http://localhost:5173"})
-    assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+        response = await client.get(
+            "/api/v1/system/version", headers={"Origin": origin}
+        )
+    assert response.headers["Access-Control-Allow-Origin"] == origin
     assert "X-Correlation-ID" in response.headers["Access-Control-Expose-Headers"]
 
 

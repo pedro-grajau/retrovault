@@ -115,6 +115,7 @@ def _candidate(run_id, evidence_id):
         "values": {"title": "Título original"},
         "lineage": {"title": {"source": "retroachievements"}},
         "corrections": [],
+        "rights_decision_ids": [],
     }
 
 
@@ -175,6 +176,29 @@ def test_correction_rejects_commercial_fields_before_persistence() -> None:
             "price",
             "99.90",
             "Campo comercial proibido",
+            '"etag-current"',
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("title", "texto\x00inválido", "Motivo válido"),
+        ("title", "texto\ud800inválido", "Motivo válido"),
+        ("title", "título válido", "motivo\x00inválido"),
+        ("included_items", ["item\x00inválido"], "Motivo válido"),
+    ],
+)
+def test_correction_rejects_text_postgres_cannot_store(field, value, reason) -> None:
+    repository = PostgresRepository(engine=None)
+
+    with pytest.raises(InvalidCorrection, match="invalid_correction"):
+        repository.correct_review(
+            uuid4(),
+            "42",
+            field,
+            value,
+            reason,
             '"etag-current"',
         )
 
@@ -252,8 +276,15 @@ class RevalidatedCandidateConnection:
                     "role": "box_art",
                     "storage_right": "confirmed",
                     "publication_right": "confirmed",
+                    "source_publication_right": "confirmed",
                     "attribution": "RetroAchievements",
                     "eligible": True,
+                    "rights_decision_id": None,
+                    "rights_scope": None,
+                    "rights_basis": None,
+                    "terms_reference": None,
+                    "rights_actor": None,
+                    "rights_decided_at": None,
                     "content_hash": "a" * 64,
                     "content": output.getvalue(),
                 }
@@ -277,9 +308,11 @@ class RevalidatedCandidateConnection:
                 *([other_issue] if other_issue else []),
             ],
         }
+        self.queries = []
 
     def execute(self, statement, parameters=None):
         normalized = " ".join(str(statement).split()).lower()
+        self.queries.append(normalized)
         for marker, rows in self.rows.items():
             if marker in normalized:
                 return CandidateResult(rows)
@@ -316,7 +349,31 @@ def test_correction_revalidation_resolves_required_field_but_keeps_other_issue(
         assert other_issue in candidate["issues"]
 
 
+def test_loopback_projection_preserves_explicit_denied_publication_right() -> None:
+    run_id, evidence_id = uuid4(), uuid4()
+    connection = RevalidatedCandidateConnection(run_id, evidence_id)
+    media_row = connection.rows["from data_governance.media_rights mr"][0]
+    media_row.update(
+        {
+            "publication_right": "denied",
+            "source_publication_right": "denied",
+            "rights_decision_id": uuid4(),
+            "rights_scope": "loopback_only",
+        }
+    )
 
+    candidate = PostgresRepository(engine=None)._review_candidate(
+        connection, run_id, "42", "editorial-v1"
+    )
+
+    media_query = next(
+        query for query in connection.queries
+        if "from data_governance.media_rights mr" in query
+    )
+    assert "mr.publication_right <> 'denied'" in media_query
+    assert candidate["media"][0]["publication_right"] == "denied"
+    assert candidate["cover"] is None
+    assert any(issue["code"] == "cover_rights_unconfirmed" for issue in candidate["issues"])
 
 def test_decompression_bomb_during_candidate_review_quarantines_cover(
     monkeypatch,

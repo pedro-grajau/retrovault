@@ -35,6 +35,13 @@ class PublicDiscovery:
         self.catalog = catalog
         self.commerce = commerce
 
+    def get_game_offers(self, game_id: UUID) -> list[Offer]:
+        """Read current Commerce facts for a published game detail page."""
+        try:
+            return self.commerce.list_offers([game_id]).get(game_id, [])
+        except CommerceReadUnavailable as exc:
+            raise CommerceUnavailable from exc
+
     @staticmethod
     def _is_available(offers: list[Offer]) -> bool:
         return any(offer.available_units > 0 for offer in offers)

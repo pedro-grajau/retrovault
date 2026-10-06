@@ -15,14 +15,25 @@ from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepo
 from app.modules.catalog.api.router import configure_services
 from app.modules.catalog.api.router import router as catalog_router
 from app.modules.commerce.adapters.postgres_offers import PostgresOfferReader
+from app.modules.concierge.api.router import (
+    configure_services as configure_concierge_services,
+)
+from app.modules.concierge.api.router import router as concierge_router
 from app.platform.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 _database_engine = create_engine(settings.database_url, pool_pre_ping=True)
+_catalog_repository = PostgresCatalogRepository(_database_engine)
 configure_services(
-    PostgresCatalogRepository(_database_engine),
+    _catalog_repository,
     PostgresOfferReader(_database_engine),
+)
+configure_concierge_services(
+    _catalog_repository,
+    secret=settings.pixel_context_reference_secret.get_secret_value(),
+    whatsapp_number=settings.pixel_whatsapp_number,
+    ttl_seconds=settings.pixel_context_reference_ttl_seconds,
 )
 
 
@@ -40,8 +51,15 @@ class Problem(BaseModel):
 
 
 app = FastAPI(title="RetroVault API", version="1.0.0", openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["GET"], allow_headers=["X-Correlation-ID", "If-None-Match"], expose_headers=["X-Correlation-ID", "ETag"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:4173"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Correlation-ID", "If-None-Match"],
+    expose_headers=["X-Correlation-ID", "ETag"],
+)
 app.include_router(catalog_router)
+app.include_router(concierge_router)
 
 CORRELATION_ID_PARAMETER = {
     "name": "X-Correlation-ID",

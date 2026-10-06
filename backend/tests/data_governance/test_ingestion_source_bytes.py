@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from app.modules.data_governance.adapters.local_package import LocalPackage
 from app.modules.data_governance.adapters.postgres_repository import PostgresRepository
 from app.modules.data_governance.application.ingest import ingest
 from app.modules.data_governance.domain.models import (
@@ -75,7 +76,7 @@ class RecordingRepository:
             "source_metrics": record.source_metrics,
         }
 
-    def fail(self, run_id, record_id, code, correlation_id):
+    def fail(self, run_id, record_id, code, correlation_id, *, cause=None):
         raise AssertionError(f"fixture should not fail: {code}")
 
     def finish(self, run_id, received, preserved, rejected):
@@ -86,8 +87,34 @@ class RecordingRepository:
 
 
 class RejectionRecordingRepository(RecordingRepository):
-    def fail(self, run_id, record_id, code, correlation_id):
-        self.failure = (run_id, record_id, code, correlation_id)
+    def fail(self, run_id, record_id, code, correlation_id, *, cause=None):
+        self.failure = (run_id, record_id, code, correlation_id, cause)
+
+
+def test_deeply_nested_local_record_is_rejected_without_aborting_other_records(
+    tmp_path,
+) -> None:
+    package = tmp_path / "deep-package"
+    package.mkdir()
+    (package / "manifest.json").write_text(
+        '{"source":"local-test","version":"deep-v1",'
+        '"captured_at":"2026-09-30T12:00:00Z","actor":"Eduardo",'
+        '"records":[{"id":"deep","file":"deep.json"},'
+        '{"id":"valid","file":"valid.json"}]}'
+    )
+    (package / "deep.json").write_text(
+        '{"id":"deep","attributes":{"nested":' + "[" * 1200 + "0" + "]" * 1200 + "}}"
+    )
+    valid_payload = b'{"id":"valid","attributes":{"title":"Jogo","platform":"SNES"}}'
+    (package / "valid.json").write_bytes(valid_payload)
+    repository = RejectionRecordingRepository()
+
+    ingest(LocalPackage(package), repository, "test-version")
+
+    assert repository.failure[1:3] == ("deep", "record_rejected")
+    assert repository.failure[4] == "invalid_record"
+    assert repository.preserved["raw_payload"] == valid_payload
+    assert repository.finished == (2, 1, 1)
 
 
 def test_ingest_hashes_and_persists_the_original_source_bytes() -> None:

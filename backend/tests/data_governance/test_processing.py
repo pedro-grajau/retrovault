@@ -377,4 +377,67 @@ def test_processing_persists_lineage_conflicts_idempotently_without_publication(
     next_result = process_run(repository, next_run["id"])
     assert next_result["quarantine"] == 1
     assert any(match["kind"] == "conflict" for match in next_result["matches"])
+
+    denied_package = tmp_path / "denied-package"
+    denied_package.mkdir()
+    (denied_package / "cover.png").write_bytes(PNG)
+    (denied_package / "manifest.json").write_text(
+        json.dumps(
+            {
+                "source": f"processing-denied-{uuid4().hex}",
+                "version": "1",
+                "captured_at": "2026-09-29T12:00:00Z",
+                "actor": "Eduardo",
+                "records": [{"id": "rights-denied", "file": "denied.json"}],
+            }
+        )
+    )
+    (denied_package / "denied.json").write_text(
+        json.dumps(
+            {
+                "id": "rights-denied",
+                "attributes": {"title": "Direito negado", "platform": "SNES"},
+                "media": [
+                    {
+                        "path": "cover.png",
+                        "role": "box_art",
+                        "storage_right": "confirmed",
+                        "publication_right": "denied",
+                        "attribution": "RetroAchievements",
+                    }
+                ],
+            }
+        )
+    )
+    denied_run = ingest(LocalPackage(denied_package), repository, "test")
+    with engine.begin() as connection:
+        evidence_id = connection.execute(
+            text("""
+                SELECT re.evidence_id
+                FROM data_governance.run_evidence re
+                JOIN data_governance.raw_evidence e ON e.id=re.evidence_id
+                WHERE re.run_id=:run_id AND e.source_record_id='rights-denied'
+            """),
+            {"run_id": denied_run["id"]},
+        ).scalar_one()
+        connection.execute(
+            text("""
+                INSERT INTO data_governance.private_use_cover_decisions
+                    (id, evidence_id, media_path, scope, basis, terms_reference,
+                     actor, decided_at)
+                VALUES (:id, :evidence_id, 'cover.png', 'loopback_only',
+                        'Legacy decision fixture', 'fixture', 'Eduardo', now())
+            """),
+            {"id": uuid4(), "evidence_id": evidence_id},
+        )
+    denied_result = process_run(repository, denied_run["id"])
+    denied_record = denied_result["records"][0]
+    assert len(denied_result["records"]) == 1
+    assert denied_record["record_id"] == "rights-denied"
+    assert denied_record["state"] == "quarantine"
+    assert any(
+        issue["record_id"] == "rights-denied"
+        and issue["code"] == "cover_rights_unconfirmed"
+        for issue in denied_result["issues"]
+    )
     engine.dispose()

@@ -18,6 +18,9 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-retrovault-local}@db:5432/${POSTGRES_DB:-retrovault}
       RETROACHIEVEMENTS_API_KEY: ${RETROACHIEVEMENTS_API_KEY:-${RETRO_ACHIEVEMENTS_KEY:-}}
       RETROACHIEVEMENTS_CACHE_DIR: /var/lib/retrovault/retroachievements-cache
+      PIXEL_WHATSAPP_NUMBER: ${PIXEL_WHATSAPP_NUMBER:-}
+      PIXEL_CONTEXT_REFERENCE_SECRET: ${PIXEL_CONTEXT_REFERENCE_SECRET:-}
+      PIXEL_CONTEXT_REFERENCE_TTL_SECONDS: ${PIXEL_CONTEXT_REFERENCE_TTL_SECONDS:-1800}
     volumes:
       - retroachievements-cache:/var/lib/retrovault/retroachievements-cache
     command: ["sh", "-c", "alembic upgrade head && python scripts/seed-sandbox-commerce.py && exec fastapi run --host 0.0.0.0"]
@@ -47,7 +50,28 @@ services:
       retries: 10
     depends_on:
       backend: {condition: service_healthy}
+  frontend-lcp:
+    image: oven/bun:1@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895
+    working_dir: /workspace/frontend
+    command:
+      ["sh", "-c", "bun install --frozen-lockfile && bun run build && bun run preview --host 0.0.0.0 --port 4173"]
+    volumes:
+      - ".:/workspace"
+      - "frontend-lcp-node-modules:/workspace/frontend/node_modules"
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_APP_VERSION: ${APP_VERSION:-dev}
+      VITE_BUILD_OUT_DIR: /tmp/retrovault-lcp-dist
+    ports: ["127.0.0.1:4173:4173"]
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:4173').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      backend: {condition: service_healthy}
 volumes:
   retrovault-db:
   retroachievements-cache:
   frontend-node-modules:
+  frontend-lcp-node-modules:

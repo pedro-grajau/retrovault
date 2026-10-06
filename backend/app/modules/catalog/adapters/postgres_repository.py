@@ -14,6 +14,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.catalog.domain.publication import (
     GameNotFound,
@@ -21,7 +22,10 @@ from app.modules.catalog.domain.publication import (
     PublicationConflict,
     PublishedGame,
 )
-from app.modules.catalog.ports.repository import PublishedSearchHit
+from app.modules.catalog.ports.repository import (
+    CatalogReadUnavailable,
+    PublishedSearchHit,
+)
 
 _EDITORIAL_FIELDS = {
     "title", "platform", "region", "edition", "genre", "developer",
@@ -34,6 +38,15 @@ _FORBIDDEN_FIELDS = {"price", "stock", "sku", "preco", "estoque", "condition", "
 class PostgresCatalogRepository:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
+
+    @contextmanager
+    def _read_connection(self, *, transaction: bool = False) -> Generator[Connection]:
+        try:
+            manager = self.engine.begin() if transaction else self.engine.connect()
+            with manager as connection:
+                yield connection
+        except SQLAlchemyError as exc:
+            raise CatalogReadUnavailable from exc
 
     def list_facets(self) -> dict[str, list[str]]:
         query = text("""
@@ -48,7 +61,7 @@ class PostgresCatalogRepository:
             ORDER BY kind, value
         """)
         values: dict[str, dict[str, str]] = {"platforms": {}, "genres": {}}
-        with self.engine.connect() as connection:
+        with self._read_connection() as connection:
             rows = connection.execute(query).mappings()
             for row in rows:
                 key = "platforms" if row["kind"] == "platform" else "genres"
@@ -247,7 +260,7 @@ class PostgresCatalogRepository:
             ORDER BY g.id
             LIMIT :limit
         """)
-        with self.engine.connect() as connection:
+        with self._read_connection() as connection:
             rows = list(connection.execute(query, params).mappings())
         has_more = len(rows) > limit
         games = [self._row_game(row) for row in rows[:limit]]
@@ -366,7 +379,7 @@ class PostgresCatalogRepository:
             ORDER BY match_rank, title_similarity DESC, id
             LIMIT :limit
         """)
-        with self.engine.begin() as connection:
+        with self._read_connection(transaction=True) as connection:
             connection.execute(
                 text("SET LOCAL search_path TO pg_catalog, extensions, public")
             )
@@ -393,22 +406,25 @@ class PostgresCatalogRepository:
         return hits, next_cursor
 
     def get_game(self, game_id: UUID) -> PublishedGame | None:
-        with self.engine.connect() as connection:
-            row = connection.execute(
-                text("""
-                    SELECT g.id, g.title, g.platform, g.editorial, g.source,
-                           g.source_record_id, g.version, g.etag, g.updated_at AS verified_at,
-                           g.cover_hash, m.content_type, m.attribution
-                    FROM catalog.published_games g
-                    JOIN catalog.published_media m ON m.content_hash = g.cover_hash
-                    WHERE g.id=:id AND g.active
-                """),
-                {"id": game_id},
-            ).mappings().first()
+        try:
+            with self._read_connection() as connection:
+                row = connection.execute(
+                    text("""
+                        SELECT g.id, g.title, g.platform, g.editorial, g.source,
+                               g.source_record_id, g.version, g.etag, g.updated_at AS verified_at,
+                               g.cover_hash, m.content_type, m.attribution
+                        FROM catalog.published_games g
+                        JOIN catalog.published_media m ON m.content_hash = g.cover_hash
+                        WHERE g.id=:id AND g.active
+                    """),
+                    {"id": game_id},
+                ).mappings().first()
+        except CatalogReadUnavailable:
+            raise
         return self._row_game(row) if row else None
 
     def get_cover(self, game_id: UUID) -> tuple[bytes, str, str] | None:
-        with self.engine.connect() as connection:
+        with self._read_connection() as connection:
             row = connection.execute(
                 text("""
                     SELECT m.content, m.content_type, m.content_hash
@@ -502,11 +518,6 @@ class PostgresCatalogRepository:
             raise ValueError("invalid_idempotency_key")
         source = candidate.get("source")
         source_record_id = str(candidate.get("record_id", ""))
-        cover_for_reference = candidate.get("cover")
-        rights_reference = self._rights_reference(
-            candidate,
-            cover_for_reference if isinstance(cover_for_reference, dict) else {},
-        )
         request_hash = self._request_hash(
             "publish",
             {
@@ -542,6 +553,7 @@ class PostgresCatalogRepository:
             or not isinstance(cover.get("content"), bytes)
             or cover.get("storage_right") != "confirmed"
             or cover.get("publication_right") != "confirmed"
+            or cover.get("source_publication_right") == "denied"
             or (
                 cover.get("source_publication_right") == "unknown"
                 and (
@@ -552,6 +564,7 @@ class PostgresCatalogRepository:
             or not str(cover.get("attribution", "")).strip()
         ):
             raise PublicationConflict("candidate_etag_or_cover_invalid")
+        rights_reference = self._rights_reference(candidate, cover)
         if set(values) - _EDITORIAL_FIELDS or set(values) & _FORBIDDEN_FIELDS:
             raise ValueError("invalid_editorial_fields")
         title, platform = values.get("title"), values.get("platform")

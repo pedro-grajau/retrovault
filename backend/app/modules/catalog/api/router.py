@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Literal
 from uuid import UUID
 
@@ -15,7 +17,10 @@ from app.modules.catalog.application.discovery import (
     SortOrder,
 )
 from app.modules.catalog.domain.publication import PublishedGame
-from app.modules.catalog.ports.repository import PublishedCatalog
+from app.modules.catalog.ports.repository import (
+    CatalogReadUnavailable,
+    PublishedCatalog,
+)
 from app.modules.commerce.domain.offers import Offer
 from app.modules.commerce.ports.offers import OfferReader
 
@@ -47,6 +52,7 @@ class OfferResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    sku_code: str
     mode: Literal["purchase", "rental"]
     price_minor: int
     currency: Literal["BRL"]
@@ -54,6 +60,15 @@ class OfferResponse(BaseModel):
     available_units: int
     demo_rank: int
     sandbox: bool
+    units: list[PhysicalUnitResponse]
+
+
+class PhysicalUnitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    condition_summary: str
+    defects: list[str] | None = None
+    included_items: list[str] | None = None
 
 
 class GameResponse(BaseModel):
@@ -70,6 +85,7 @@ class GameResponse(BaseModel):
     verified_at: str
     cover_attribution: str
     cover_url: str
+    commerce_status: Literal["available", "unavailable"]
     offers: list[OfferResponse] | None = None
 
 
@@ -112,7 +128,11 @@ class GameFacetsResponse(BaseModel):
 
 
 def _game_response(
-    game: PublishedGame, offers: list[Offer] | None = None
+    game: PublishedGame,
+    offers: list[Offer] | None = None,
+    commerce_status: Literal["available", "unavailable"] = "available",
+    *,
+    include_unit_facts: bool = False,
 ) -> GameResponse:
     attributes = game.editorial.get("attributes", {})
     raw_lineage = game.editorial.get("lineage", {})
@@ -143,10 +163,12 @@ def _game_response(
         verified_at=game.verified_at.isoformat(),
         cover_attribution=game.cover_attribution,
         cover_url=f"/api/v1/catalog/games/{game.id}/box-art",
+        commerce_status=commerce_status,
         offers=(
             [
                 OfferResponse(
                     id=offer.id,
+                    sku_code=offer.sku_code,
                     mode=offer.mode,
                     price_minor=offer.price_minor,
                     currency=offer.currency,
@@ -154,6 +176,26 @@ def _game_response(
                     available_units=offer.available_units,
                     demo_rank=offer.demo_rank,
                     sandbox=offer.sandbox,
+                    units=(
+                        [
+                            PhysicalUnitResponse(
+                                condition_summary=unit.condition_summary,
+                                defects=(
+                                    list(unit.defects)
+                                    if unit.defects is not None
+                                    else None
+                                ),
+                                included_items=(
+                                    list(unit.included_items)
+                                    if unit.included_items is not None
+                                    else None
+                                ),
+                            )
+                            for unit in offer.units
+                        ]
+                        if include_unit_facts
+                        else []
+                    ),
                 )
                 for offer in offers
             ]
@@ -163,9 +205,16 @@ def _game_response(
     )
 
 
-@router.get("/facets", response_model=GameFacetsResponse)
+@router.get(
+    "/facets",
+    response_model=GameFacetsResponse,
+    responses={503: {"description": "Catalog unavailable."}},
+)
 async def list_facets() -> GameFacetsResponse:
-    facets = _catalog_service().list_facets()
+    try:
+        facets = _catalog_service().list_facets()
+    except CatalogReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="catalog_unavailable") from exc
     return GameFacetsResponse(**facets)
 
 
@@ -173,7 +222,9 @@ async def list_facets() -> GameFacetsResponse:
     "/games",
     response_model=GameListResponse,
     response_model_exclude_none=True,
-    responses={503: {"description": "Commerce indisponível."}},
+    responses={
+        503: {"description": "Commerce or Catalog unavailable."},
+    },
 )
 async def list_games(
     limit: int = Query(default=20, ge=1, le=100),
@@ -198,6 +249,8 @@ async def list_games(
         )
     except CommerceUnavailable as exc:
         raise HTTPException(status_code=503, detail="commerce_unavailable") from exc
+    except CatalogReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="catalog_unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid_cursor") from exc
     return GameListResponse(
@@ -207,6 +260,7 @@ async def list_games(
                 page.offers_by_game.get(game.id, [])
                 if page.offers_by_game is not None
                 else None,
+                page.commerce_status,
             )
             for game in page.games
         ],
@@ -234,6 +288,7 @@ async def list_games(
             },
         },
         404: {"description": "Published game not found."},
+        503: {"description": "Catalog unavailable."},
     },
 )
 async def get_game(
@@ -241,15 +296,47 @@ async def get_game(
     response: Response,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> GameResponse | Response:
-    game = _catalog_service().get_game(game_id)
+    try:
+        game = _catalog_service().get_game(game_id)
+    except CatalogReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="catalog_unavailable") from exc
     if game is None:
         raise HTTPException(status_code=404, detail="not_found")
-    etag = f'"{game.etag}"'
+    try:
+        offers = _discovery_service().get_game_offers(game_id)
+        commerce_status: Literal["available", "unavailable"] = "available"
+    except CommerceUnavailable:
+        offers = None
+        commerce_status = "unavailable"
+    game_response = _game_response(
+        game, offers, commerce_status, include_unit_facts=True
+    )
+    etag = f'"{_detail_etag(game.etag, game_response)}"'
     response.headers["ETag"] = etag
-    response.headers["Cache-Control"] = "public, max-age=60"
+    response.headers["Cache-Control"] = "public, max-age=30"
     if _if_none_match(if_none_match, etag):
-        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=60"})
-    return _game_response(game)
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=30"})
+    return game_response
+
+
+def _detail_etag(game_etag: str, game: GameResponse) -> str:
+    """Include changing Commerce facts in the detail validator."""
+    if game.commerce_status == "available" and not game.offers:
+        return game_etag
+    payload = json.dumps(
+        {
+            "game_etag": game_etag,
+            "commerce_status": game.commerce_status,
+            "offers": (
+                [offer.model_dump(mode="json") for offer in game.offers]
+                if game.offers is not None
+                else None
+            ),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _if_none_match(value: str | None, etag: str) -> bool:
@@ -286,13 +373,17 @@ def _if_none_match(value: str | None, etag: str) -> bool:
             },
         },
         404: {"description": "Published box art not found."},
+        503: {"description": "Catalog unavailable."},
     },
 )
 async def get_box_art(
     game_id: UUID,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
-    cover = _catalog_service().get_cover(game_id)
+    try:
+        cover = _catalog_service().get_cover(game_id)
+    except CatalogReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="catalog_unavailable") from exc
     if cover is None:
         raise HTTPException(status_code=404, detail="not_found")
     content, content_type, content_hash = cover

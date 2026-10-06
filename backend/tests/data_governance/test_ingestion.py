@@ -18,6 +18,7 @@ from app.modules.data_governance.adapters.postgres_repository import (
     PostgresRepository,
     ReviewConflict,
 )
+from app.modules.data_governance.adapters.retroachievements import ALLOWED_CONSOLES
 from app.modules.data_governance.application.ingest import (
     InvalidRecord,
     VersionConflict,
@@ -87,6 +88,19 @@ def test_record_validation_rejects_commerce_and_invalid_rights() -> None:
         )
     with pytest.raises(InvalidRecord):
         parse_record("x", '{"id":"x","attributes":{"title":"ok","title":"outro"}}')
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"id":"x","attributes":{"title":"bad\\u0000text"}}',
+        '{"id":"x","attributes":{"title":"bad\\ud800text"}}',
+        '{"id":"x","attributes":{"extra":' + "[" * 1200 + "0" + "]" * 1200 + "}}",
+    ],
+)
+def test_record_rejects_unrepresentable_or_overdeep_json(raw: str) -> None:
+    with pytest.raises(InvalidRecord, match="invalid_record"):
+        parse_record("x", raw)
 
 
 def test_incomplete_editorial_record_remains_raw_evidence() -> None:
@@ -329,6 +343,233 @@ def test_ra_snes_cli_rejects_empty_catalog(
     assert json.loads(capsys.readouterr().out) == {"code": "empty_game_catalog"}
 
 
+@pytest.mark.parametrize(("console_id", "console_name"), sorted(ALLOWED_CONSOLES.items()))
+def test_ra_console_cli_ingests_all_batches_for_each_allowed_console(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    console_id: int,
+    console_name: str,
+) -> None:
+    from types import SimpleNamespace
+
+    import app.modules.data_governance.api.cli as cli
+
+    sources: list[object] = []
+    manifests = [tmp_path / "batch-1.json"]
+
+    class FakeSource:
+        def __init__(self, manifest, api_key, **kwargs):
+            self.manifest = manifest
+            self.api_key = api_key
+            self.kwargs = kwargs
+
+        def discover_console_games(self, selected_console_id, *, page_size):
+            assert selected_console_id == console_id
+            return {
+                "version": f"console-{console_id}-catalog",
+                "catalog_hash": "c" * 64,
+                "games": [{"ID": 1, "ConsoleID": console_id}],
+            }
+
+        def create_batch_manifests(self, catalog, *, batch_size):
+            assert catalog["version"] == f"console-{console_id}-catalog"
+            return manifests
+
+    def fake_ingest(source, _repository, _app_version):
+        sources.append(source)
+        return {"id": "run-1", "state": "completed"}
+
+    monkeypatch.setattr(cli, "create_engine", lambda _url: object())
+    monkeypatch.setattr(cli, "PostgresRepository", lambda _engine: object())
+    monkeypatch.setattr(cli, "RetroAchievementsSource", FakeSource)
+    monkeypatch.setattr(cli, "ingest", fake_ingest)
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        SimpleNamespace(
+            database_url="postgresql://fixture",
+            app_version="test-version",
+            retroachievements_api_key=SimpleNamespace(
+                get_secret_value=lambda: "secret"
+            ),
+            retroachievements_cache_dir=tmp_path / "cache",
+        ),
+    )
+
+    assert cli.main(["ra-console-ingest", "--console-id", str(console_id)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["console_id"] == console_id
+    assert result["console_name"] == console_name
+    assert result["game_count"] == 1
+    assert result["batch_size"] == 100
+    assert len(sources) == 1
+    assert sources[0].kwargs["expected_console_id"] == console_id
+
+
+def test_ra_console_private_publish_passes_console_only_to_rights_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    import app.composition
+    import app.modules.data_governance.api.cli as cli
+
+    run_id = uuid4()
+    calls: list[tuple[str, object]] = []
+
+    class FakeRepository:
+        def catalog_run_ids(
+            self,
+            catalog_version,
+            *,
+            expected_game_count,
+            expected_batch_count,
+            batch_size=None,
+        ):
+            assert catalog_version == f"console-1-{'a' * 32}"
+            assert expected_game_count == 1
+            assert expected_batch_count == 1
+            assert batch_size == 100
+            calls.append(("catalog_run_ids", catalog_version))
+            return [run_id]
+
+        def record_private_use_for_catalog(
+            self,
+            catalog_version,
+            *,
+            expected_game_count,
+            expected_batch_count,
+            batch_size=None,
+            console_id=3,
+        ):
+            assert console_id == 1
+            calls.append(("private_use", console_id))
+            return {"eligible_covers": 1, "decisions_created": 1, "decisions_existing": 0}
+
+        def review_candidate(self, *_args, **_kwargs):
+            return {"state": "quarantine", "issues": [{"code": "cover_missing"}]}
+
+    monkeypatch.setattr(cli, "create_engine", lambda _url: object())
+    monkeypatch.setattr(cli, "PostgresRepository", lambda _engine: FakeRepository())
+    monkeypatch.setattr(
+        cli,
+        "process_run",
+        lambda *_args: {"records": [{"record_id": "42"}]},
+    )
+    monkeypatch.setattr(
+        app.composition,
+        "build_catalog_publisher",
+        lambda _engine: object(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        SimpleNamespace(database_url="postgresql://fixture"),
+    )
+
+    assert cli.main(
+        [
+            "ra-console-private-publish",
+            "--console-id",
+            "1",
+            "--catalog-version",
+            f"console-1-{'a' * 32}",
+            "--expected-game-count",
+            "1",
+            "--expected-batch-count",
+            "1",
+            "--batch-size",
+            "100",
+        ]
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["console_id"] == 1
+    assert result["scope"] == "loopback_only"
+    assert result["processed"] == 1
+    assert result["published"] == 0
+    assert result["skipped"] == 1
+    assert calls == [
+        ("catalog_run_ids", f"console-1-{'a' * 32}"),
+        ("private_use", 1),
+    ]
+
+
+def test_ra_manual_manifest_cli_remains_generic_without_console_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    import app.modules.data_governance.api.cli as cli
+
+    source_options: list[dict[str, object]] = []
+
+    class FakeSource:
+        def __init__(self, manifest, api_key, **kwargs):
+            assert manifest == tmp_path / "manifest.json"
+            assert api_key == "secret"
+            source_options.append(kwargs)
+
+    monkeypatch.setattr(cli, "create_engine", lambda _url: object())
+    monkeypatch.setattr(cli, "PostgresRepository", lambda _engine: object())
+    monkeypatch.setattr(cli, "RetroAchievementsSource", FakeSource)
+    monkeypatch.setattr(
+        cli,
+        "ingest",
+        lambda *_args: {"id": "run-1", "state": "completed"},
+    )
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        SimpleNamespace(
+            database_url="postgresql://fixture",
+            app_version="test-version",
+            retroachievements_api_key=SimpleNamespace(
+                get_secret_value=lambda: "secret"
+            ),
+            retroachievements_cache_dir=tmp_path / "cache",
+        ),
+    )
+
+    assert cli.main(["ra-ingest", str(tmp_path / "manifest.json")]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "id": "run-1",
+        "state": "completed",
+    }
+    assert source_options == [
+        {"cache_dir": tmp_path / "cache", "expected_console_id": None}
+    ]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["ra-console-ingest"],
+        ["ra-console-ingest", "--console-id", "999"],
+        ["ra-ingest", "manifest.json", "--console-id", "999"],
+        ["ra-ingest", "manifest.json", "--console-id", "3.0"],
+    ],
+)
+def test_ra_cli_rejects_missing_or_unlisted_console_before_database_access(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+) -> None:
+    import app.modules.data_governance.api.cli as cli
+
+    monkeypatch.setattr(
+        cli,
+        "create_engine",
+        lambda _url: pytest.fail("console validation must precede database access"),
+    )
+
+    assert cli.main(argv) == 2
+    assert json.loads(capsys.readouterr().out) == {"code": "console_not_allowed"}
+
+
 def test_manifest_accepts_lowercase_rfc3339_separators_and_normalizes_utc(
     tmp_path: Path,
 ) -> None:
@@ -488,6 +729,22 @@ def test_manifest_rejects_extra_and_duplicate_keys(tmp_path: Path) -> None:
         original.replace('"actor": "Eduardo"', '"actor": "Eduardo", "actor": "outro"')
     )
     with pytest.raises(PackageError):
+        LocalPackage(package).snapshot()
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["retroachievements", "RetroAchievements", "RETROACHIEVEMENTS"],
+)
+def test_local_manifest_cannot_claim_retroachievements(
+    tmp_path: Path, source: str
+) -> None:
+    package = tmp_path / "package"
+    _package(package, source, "spoofed-v1")
+
+    from app.modules.data_governance.ports.source import PackageError
+
+    with pytest.raises(PackageError, match="invalid_manifest"):
         LocalPackage(package).snapshot()
 
 

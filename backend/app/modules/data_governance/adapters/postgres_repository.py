@@ -13,11 +13,13 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from PIL import Image
 from sqlalchemy import Connection, Engine, text
 
+from app.modules.data_governance.adapters.retroachievements import ALLOWED_CONSOLES
 from app.modules.data_governance.domain.models import (
     CatalogRecord,
     Manifest,
     Right,
     SourceResponse,
+    contains_invalid_postgres_text,
 )
 from app.modules.data_governance.domain.normalization import (
     Candidate,
@@ -191,8 +193,18 @@ class PostgresRepository:
         expected_game_count: int,
         expected_batch_count: int,
         batch_size: int | None = None,
+        console_id: int = 3,
     ) -> dict[str, int]:
-        """Append a user-declared, loopback-only use decision for valid SNES covers."""
+        """Append loopback-only decisions for valid covers from one allowed console."""
+        if type(console_id) is not int or console_id not in ALLOWED_CONSOLES:
+            raise ValueError("console_not_allowed")
+        if (
+            not isinstance(catalog_version, str)
+            or not catalog_version.startswith(f"console-{console_id}-")
+            or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", catalog_version)
+        ):
+            raise ValueError("catalog_console_mismatch")
+        expected_platform = ALLOWED_CONSOLES[console_id]
         run_ids = self.catalog_run_ids(
             catalog_version,
             expected_game_count=expected_game_count,
@@ -209,6 +221,7 @@ class PostgresRepository:
                     text("""
                         SELECT e.id AS evidence_id, e.raw_payload,
                                mr.media_path, mr.role, mr.storage_right,
+                               mr.publication_right,
                                mr.attribution, pm.content
                         FROM data_governance.run_evidence re
                         JOIN data_governance.raw_evidence e ON e.id=re.evidence_id
@@ -232,11 +245,15 @@ class PostgresRepository:
                         attributes = json.loads(row["raw_payload"]).get("attributes", {})
                     except (TypeError, ValueError, json.JSONDecodeError) as exc:
                         raise ValueError("catalog_evidence_invalid") from exc
-                    if not isinstance(attributes, dict) or attributes.get("platform") != "SNES":
-                        raise ValueError("catalog_not_snes")
+                    if (
+                        not isinstance(attributes, dict)
+                        or attributes.get("platform") != expected_platform
+                    ):
+                        raise ValueError("catalog_platform_mismatch")
                     content = bytes(row["content"]) if row["content"] is not None else None
                     if (
                         row["storage_right"] != "confirmed"
+                        or row["publication_right"] == "denied"
                         or not isinstance(row["attribution"], str)
                         or not row["attribution"].strip()
                         or not valid_image(content)
@@ -468,8 +485,26 @@ class PostgresRepository:
                     )
 
     def fail(
-        self, run_id: UUID, record_id: str, code: str, correlation_id: UUID
+        self,
+        run_id: UUID,
+        record_id: str,
+        code: str,
+        correlation_id: UUID,
+        *,
+        cause: str | None = None,
     ) -> None:
+        safe_cause = (
+            cause
+            if isinstance(cause, str)
+            and re.fullmatch(r"[a-z0-9_]{1,80}", cause)
+            else None
+        )
+        if code == "storage_error":
+            failure_cause = "Falha de persistência do registro."
+        elif safe_cause is not None:
+            failure_cause = f"Falha de aquisição ou validação ({safe_cause})."
+        else:
+            failure_cause = "Registro não preservado; verificar formato local."
         with self.engine.begin() as connection:
             connection.execute(
                 text("""
@@ -484,11 +519,7 @@ class PostgresRepository:
                     "record_id": record_id,
                     "code": code,
                     "correlation_id": correlation_id,
-                    "cause": (
-                        "Falha de persistência do registro."
-                        if code == "storage_error"
-                        else "Registro não preservado; verificar formato local."
-                    ),
+                    "cause": failure_cause,
                 },
             )
 
@@ -583,7 +614,8 @@ class PostgresRepository:
                     for item in connection.execute(
                         text("""
                     SELECT mr.media_path, mr.role, mr.storage_right,
-                       CASE WHEN pud.scope='loopback_only' THEN 'confirmed'
+                       CASE WHEN pud.scope='loopback_only'
+                                  AND mr.publication_right <> 'denied' THEN 'confirmed'
                             ELSE mr.publication_right END AS publication_right,
                            mr.publication_right AS source_publication_right,
                            mr.attribution, pm.content IS NOT NULL AS content_available,
@@ -942,11 +974,13 @@ class PostgresRepository:
         media_rows = list(connection.execute(
             text("""
                 SELECT mr.media_path, mr.role, mr.storage_right,
-                       CASE WHEN pud.scope='loopback_only' THEN 'confirmed'
+                       CASE WHEN pud.scope='loopback_only'
+                                  AND mr.publication_right <> 'denied' THEN 'confirmed'
                             ELSE mr.publication_right END AS publication_right,
                        mr.publication_right AS source_publication_right,
                        mr.attribution,
-                       CASE WHEN pud.scope='loopback_only' THEN true
+                       CASE WHEN pud.scope='loopback_only'
+                                  AND mr.publication_right <> 'denied' THEN true
                             ELSE mr.eligible END AS eligible,
                        pm.content_hash, pm.content,
                        pud.id AS rights_decision_id, pud.scope AS rights_scope,
@@ -1225,6 +1259,7 @@ class PostgresRepository:
             or not isinstance(reason, str)
             or not reason.strip()
             or len(reason) > 1000
+            or contains_invalid_postgres_text(reason)
             or (
                 field == "included_items"
                 and (
@@ -1233,9 +1268,16 @@ class PostgresRepository:
                     or not all(isinstance(item, str) for item in value)
                     or sum(len(item) for item in value if isinstance(item, str))
                     > MAX_CORRECTION_TEXT
+                    or contains_invalid_postgres_text(value)
                 )
             )
-            or (field != "included_items" and not isinstance(value, str))
+            or (
+                field != "included_items"
+                and (
+                    not isinstance(value, str)
+                    or contains_invalid_postgres_text(value)
+                )
+            )
             or (
                 field == "release_date_granularity"
                 and value not in {"year", "month", "day"}

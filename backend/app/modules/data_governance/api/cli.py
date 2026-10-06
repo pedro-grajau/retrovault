@@ -24,6 +24,7 @@ from app.modules.data_governance.adapters.postgres_repository import (
     ReviewNotFound,
 )
 from app.modules.data_governance.adapters.retroachievements import (
+    ALLOWED_CONSOLES,
     RetroAchievementsSource,
 )
 from app.modules.data_governance.application.ingest import VersionConflict, ingest
@@ -42,6 +43,24 @@ def _json_default(value: object) -> str:
     raise TypeError()
 
 
+def _console_id(value: str | None) -> int:
+    try:
+        parsed = int(value) if value is not None else None
+    except (TypeError, ValueError):
+        parsed = None
+    if type(parsed) is not int or parsed not in ALLOWED_CONSOLES:
+        raise PackageError("console_not_allowed")
+    return parsed
+
+
+def _catalog_version_pattern(console_id: int) -> re.Pattern[str]:
+    return re.compile(
+        rf"console-{console_id}-[a-f0-9]{{32}}"
+        r"(?:-[0-9]{8}T[0-9]{6}-[a-f0-9]{8})?"
+        r"(?:-attempt-[A-Za-z0-9_-]{1,24})?"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ingestão privada de catálogo local")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -57,11 +76,24 @@ def main(argv: list[str] | None = None) -> int:
     process_summary_parser.add_argument("--rule-version", default="editorial-v1")
     ra_ingest_parser = commands.add_parser("ra-ingest")
     ra_ingest_parser.add_argument("manifest", type=Path)
+    ra_ingest_parser.add_argument("--console-id")
     ra_catalog_parser = commands.add_parser("ra-snes-ingest")
     ra_catalog_parser.add_argument("--page-size", type=int, default=100)
-    ra_catalog_parser.add_argument("--batch-size", type=int, default=1000)
+    ra_catalog_parser.add_argument("--batch-size", type=int, default=100)
     ra_catalog_parser.add_argument("--refresh-cache", action="store_true")
     ra_catalog_parser.add_argument(
+        "--attempt",
+        help="Sufixo para iniciar novas execuções reaproveitando a enumeração cacheada",
+    )
+    ra_console_parser = commands.add_parser(
+        "ra-console-ingest",
+        help="Descobrir e ingerir todos os jogos com conquistas de um console permitido",
+    )
+    ra_console_parser.add_argument("--console-id", help="ID RetroAchievements permitido")
+    ra_console_parser.add_argument("--page-size", type=int, default=100)
+    ra_console_parser.add_argument("--batch-size", type=int, default=100)
+    ra_console_parser.add_argument("--refresh-cache", action="store_true")
+    ra_console_parser.add_argument(
         "--attempt",
         help="Sufixo para iniciar novas execuções reaproveitando a enumeração cacheada",
     )
@@ -73,6 +105,19 @@ def main(argv: list[str] | None = None) -> int:
         "--catalog-version",
         required=True,
         help="Versão exata retornada por ra-snes-ingest, sem o sufixo de lote",
+    )
+    console_publish_parser = commands.add_parser(
+        "ra-console-private-publish",
+        help="Registrar uso privado loopback e publicar um catálogo RA permitido",
+    )
+    console_publish_parser.add_argument("--console-id", help="ID RetroAchievements permitido")
+    console_publish_parser.add_argument("--catalog-version", required=True)
+    console_publish_parser.add_argument("--expected-game-count", type=int, required=True)
+    console_publish_parser.add_argument("--expected-batch-count", type=int, required=True)
+    console_publish_parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Tamanho de lote da ingestão; obrigatório se houver várias execuções completas",
     )
     private_publish_parser.add_argument("--expected-game-count", type=int, required=True)
     private_publish_parser.add_argument("--expected-batch-count", type=int, required=True)
@@ -108,6 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     withdrawal_parser.add_argument("--etag", required=True)
     args = parser.parse_args(argv)
     try:
+        selected_console_id: int | None = None
+        if args.command in {"ra-console-ingest", "ra-console-private-publish"}:
+            selected_console_id = _console_id(args.console_id)
+        elif args.command in {"ra-snes-ingest", "ra-snes-private-publish"}:
+            selected_console_id = 3
+        elif args.command == "ra-ingest" and args.console_id is not None:
+            selected_console_id = _console_id(args.console_id)
+
         engine = create_engine(settings.database_url)
         repository = PostgresRepository(engine)
         if args.command == "ingest":
@@ -120,11 +173,13 @@ def main(argv: list[str] | None = None) -> int:
                     args.manifest,
                     settings.retroachievements_api_key.get_secret_value(),
                     cache_dir=settings.retroachievements_cache_dir,
+                    expected_console_id=selected_console_id,
                 ),
                 repository,
                 settings.app_version,
             )
-        elif args.command == "ra-snes-ingest":
+        elif args.command in {"ra-snes-ingest", "ra-console-ingest"}:
+            assert selected_console_id is not None
             if args.attempt is not None and not re.fullmatch(
                 r"[A-Za-z0-9_-]{1,24}", args.attempt
             ):
@@ -138,7 +193,9 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir=settings.retroachievements_cache_dir,
                 refresh_cache=args.refresh_cache,
             )
-            catalog = source.discover_console_games(3, page_size=args.page_size)
+            catalog = source.discover_console_games(
+                selected_console_id, page_size=args.page_size
+            )
             games = catalog.get("games")
             if not isinstance(games, list):
                 raise PackageError("catalog_snapshot_invalid")
@@ -161,12 +218,13 @@ def main(argv: list[str] | None = None) -> int:
                     api_key,
                     cache_dir=settings.retroachievements_cache_dir,
                     refresh_cache=args.refresh_cache,
-                    expected_console_id=3,
+                    expected_console_id=selected_console_id,
                 )
                 summaries.append(ingest(batch_source, repository, settings.app_version))
             result = {
                 "source": "retroachievements",
-                "console_id": 3,
+                "console_id": selected_console_id,
+                "console_name": ALLOWED_CONSOLES[selected_console_id],
                 "filter": {"f": 1},
                 "catalog_version": catalog_version,
                 "catalog_hash": catalog["catalog_hash"],
@@ -175,10 +233,13 @@ def main(argv: list[str] | None = None) -> int:
                 "batch_size": args.batch_size,
                 "batches": summaries,
             }
-        elif args.command == "ra-snes-private-publish":
-            if not re.fullmatch(
-                r"console-3-[a-f0-9]{32}(?:-[0-9]{8}T[0-9]{6}-[a-f0-9]{8})?(?:-attempt-[A-Za-z0-9_-]{1,24})?",
-                args.catalog_version,
+        elif args.command in {
+            "ra-snes-private-publish",
+            "ra-console-private-publish",
+        }:
+            assert selected_console_id is not None
+            if not _catalog_version_pattern(selected_console_id).fullmatch(
+                args.catalog_version
             ):
                 raise PackageError("catalog_version_invalid")
             run_ids = repository.catalog_run_ids(
@@ -192,10 +253,11 @@ def main(argv: list[str] | None = None) -> int:
                 expected_game_count=args.expected_game_count,
                 expected_batch_count=args.expected_batch_count,
                 batch_size=args.batch_size,
+                console_id=selected_console_id,
             )
-            from app.modules.catalog.application.publisher import CatalogPublisher
+            from app.composition import build_catalog_publisher
 
-            publisher = CatalogPublisher(engine)
+            publisher = build_catalog_publisher(engine)
             rule_version = "editorial-v3"
             reason = (
                 "Publicação do catálogo privado de portfólio conforme declaração de "
@@ -248,7 +310,12 @@ def main(argv: list[str] | None = None) -> int:
                             )
                             continue
                         candidate_etag = str(candidate["etag"])
-                        idempotency_key = "ra-snes-private-" + hashlib.sha256(
+                        key_prefix = (
+                            "ra-snes-private-"
+                            if selected_console_id == 3
+                            else f"ra-console-{selected_console_id}-private-"
+                        )
+                        idempotency_key = key_prefix + hashlib.sha256(
                             f"{record_id}:{candidate_etag}".encode()
                         ).hexdigest()
                         publisher.publish(
@@ -267,7 +334,8 @@ def main(argv: list[str] | None = None) -> int:
                         published += 1
             result = {
                 "source": "retroachievements",
-                "console_id": 3,
+                "console_id": selected_console_id,
+                "console_name": ALLOWED_CONSOLES[selected_console_id],
                 "catalog_version": args.catalog_version,
                 "expected_game_count": args.expected_game_count,
                 "expected_batch_count": args.expected_batch_count,
@@ -315,9 +383,9 @@ def main(argv: list[str] | None = None) -> int:
                 args.rule_version,
             )
         elif args.command == "approve":
-            from app.modules.catalog.application.publisher import CatalogPublisher
+            from app.composition import build_catalog_publisher
 
-            publisher = CatalogPublisher(engine)
+            publisher = build_catalog_publisher(engine)
             with engine.begin() as connection:
                 candidate = repository.lock_review_candidate(
                     connection,
@@ -340,10 +408,10 @@ def main(argv: list[str] | None = None) -> int:
                     connection=connection,
                 )
         else:
-            from app.modules.catalog.application.publisher import CatalogPublisher
+            from app.composition import build_catalog_publisher
 
             with engine.begin() as connection:
-                result = CatalogPublisher(engine).withdraw(
+                result = build_catalog_publisher(engine).withdraw(
                     args.public_id,
                     actor="Eduardo",
                     reason=args.reason,

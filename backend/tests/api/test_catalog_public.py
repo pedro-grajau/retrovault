@@ -15,8 +15,11 @@ from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepo
 from app.modules.catalog.api import router as catalog_router
 from app.modules.catalog.application.discovery import PublicDiscovery
 from app.modules.catalog.domain.publication import PublishedGame
-from app.modules.catalog.ports.repository import PublishedSearchHit
-from app.modules.commerce.domain.offers import Offer
+from app.modules.catalog.ports.repository import (
+    CatalogReadUnavailable,
+    PublishedSearchHit,
+)
+from app.modules.commerce.domain.offers import Offer, PhysicalUnitFacts
 from app.modules.commerce.ports.offers import CommerceReadUnavailable
 
 
@@ -148,6 +151,17 @@ class FakePublishedCatalog:
         return b"published-cover", "image/png", game.cover_hash
 
 
+class UnavailablePublishedCatalog(FakePublishedCatalog):
+    def _unavailable(self, *args, **kwargs):
+        raise CatalogReadUnavailable
+
+    list_facets = _unavailable
+    list_games = _unavailable
+    search_games = _unavailable
+    get_game = _unavailable
+    get_cover = _unavailable
+
+
 class FakeCommerceReader:
     def __init__(
         self,
@@ -240,6 +254,7 @@ def _offer(
         available_units=available_units,
         demo_rank=rank,
         sandbox=True,
+        sku_code=f"SKU-{game_id.hex[:8]}-{mode}",
     )
 
 
@@ -303,6 +318,7 @@ async def test_public_catalog_serializes_populated_sandbox_offers(monkeypatch) -
     assert payload["items"][0]["offers"] == [
         {
             "id": str(offer.id),
+            "sku_code": offer.sku_code,
             "mode": "purchase",
             "price_minor": 4990,
             "currency": "BRL",
@@ -310,6 +326,7 @@ async def test_public_catalog_serializes_populated_sandbox_offers(monkeypatch) -
             "available_units": 2,
             "demo_rank": 7,
             "sandbox": True,
+            "units": [],
         }
     ]
 
@@ -441,7 +458,7 @@ async def test_commerce_failure_hides_offers_or_rejects_availability_filter(monk
 @pytest.mark.anyio
 async def test_public_game_etag_and_unpublished_not_found(monkeypatch) -> None:
     game = _game()
-    monkeypatch.setattr(catalog_router, "_catalog", FakePublishedCatalog(game))
+    _wire_public_catalog(monkeypatch, FakePublishedCatalog(game))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(f"/api/v1/catalog/games/{game.id}")
@@ -453,9 +470,98 @@ async def test_public_game_etag_and_unpublished_not_found(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.headers["ETag"] == f'"{game.etag}"'
-    assert response.headers["Cache-Control"] == "public, max-age=60"
+    assert response.headers["Cache-Control"] == "public, max-age=30"
     assert cached.status_code == 304
     assert missing.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_detail_etag_tracks_commerce_and_keeps_editorial_on_commerce_failure(
+    monkeypatch,
+) -> None:
+    game = _game()
+    commerce = FakeCommerceReader({game.id: [_offer(game.id, "purchase", rank=1)]})
+    _wire_public_catalog(monkeypatch, FakePublishedCatalog(game), commerce)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get(f"/api/v1/catalog/games/{game.id}")
+        commerce.offers_by_game[game.id] = [
+            _offer(game.id, "purchase", rank=1, available_units=0)
+        ]
+        changed = await client.get(f"/api/v1/catalog/games/{game.id}")
+        commerce.unavailable = True
+        unavailable = await client.get(f"/api/v1/catalog/games/{game.id}")
+
+    assert first.status_code == changed.status_code == unavailable.status_code == 200
+    assert first.headers["ETag"] != changed.headers["ETag"]
+    assert unavailable.json()["commerce_status"] == "unavailable"
+    assert "offers" not in unavailable.json()
+    assert unavailable.json()["title"] == game.title
+
+
+@pytest.mark.anyio
+async def test_detail_maps_each_mode_and_physical_unit_facts(monkeypatch) -> None:
+    game = _game()
+    purchase = _offer(game.id, "purchase", rank=1, available_units=1)
+    rental = Offer(
+        **{
+            **purchase.__dict__,
+            "id": uuid4(),
+            "mode": "rental",
+            "available_units": 0,
+            "units": (),
+        }
+    )
+    purchase = Offer(
+        **{
+            **purchase.__dict__,
+            "units": (
+                PhysicalUnitFacts(
+                    "Muito bom", ("Risco no estojo",), ("Cartucho", "Manual")
+                ),
+            ),
+        }
+    )
+    _wire_public_catalog(
+        monkeypatch,
+        FakePublishedCatalog(game),
+        FakeCommerceReader({game.id: [purchase, rental]}),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/catalog/games/{game.id}")
+
+    assert response.status_code == 200
+    offers = {offer["mode"]: offer for offer in response.json()["offers"]}
+    assert offers["purchase"]["units"] == [
+        {
+            "condition_summary": "Muito bom",
+            "defects": ["Risco no estojo"],
+            "included_items": ["Cartucho", "Manual"],
+        }
+    ]
+    assert offers["rental"]["available_units"] == 0
+    assert offers["rental"]["units"] == []
+
+
+@pytest.mark.anyio
+async def test_public_read_routes_return_sanitized_503_on_catalog_failure(monkeypatch) -> None:
+    game_id = uuid4()
+    _wire_public_catalog(monkeypatch, UnavailablePublishedCatalog(None))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        responses = [
+            await client.get("/api/v1/catalog/facets"),
+            await client.get("/api/v1/catalog/games"),
+            await client.get("/api/v1/catalog/games", params={"q": "SN"}),
+            await client.get(f"/api/v1/catalog/games/{game_id}"),
+            await client.get(f"/api/v1/catalog/games/{game_id}/box-art"),
+        ]
+
+    assert [response.status_code for response in responses] == [503] * 5
+    assert all(response.json()["status"] == 503 for response in responses)
+    assert all(response.json()["code"] == "http_error" for response in responses)
+    assert all("traceback" not in response.text.lower() for response in responses)
 
 
 @pytest.mark.anyio
@@ -498,6 +604,7 @@ def test_catalog_openapi_documents_public_error_and_not_modified_responses() -> 
     paths = schema["paths"]
 
     detail = paths["/api/v1/catalog/games/{game_id}"]["get"]["responses"]
+    facets = paths["/api/v1/catalog/facets"]["get"]["responses"]
     box_art = paths["/api/v1/catalog/games/{game_id}/box-art"]["get"]["responses"]
     game_list = paths["/api/v1/catalog/games"]["get"]["responses"]
     schemas = schema["components"]["schemas"]
@@ -507,6 +614,11 @@ def test_catalog_openapi_documents_public_error_and_not_modified_responses() -> 
     assert "304" in detail
     assert "404" in detail
     assert "503" in game_list
+    assert "Catalog" in game_list["503"]["description"]
+    assert "503" in facets
+    assert "Catalog" in facets["503"]["description"]
+    assert "503" in box_art
+    assert "Catalog" in box_art["503"]["description"]
     assert "304" in box_art
     assert "404" in box_art
     assert "ETag" in box_art["200"]["headers"]
@@ -528,7 +640,7 @@ def test_catalog_openapi_documents_public_error_and_not_modified_responses() -> 
 @pytest.mark.anyio
 async def test_catalog_cors_allows_conditional_requests_and_exposes_etag(monkeypatch) -> None:
     game = _game()
-    monkeypatch.setattr(catalog_router, "_catalog", FakePublishedCatalog(game))
+    _wire_public_catalog(monkeypatch, FakePublishedCatalog(game))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         preflight = await client.options(
@@ -543,12 +655,23 @@ async def test_catalog_cors_allows_conditional_requests_and_exposes_etag(monkeyp
             f"/api/v1/catalog/games/{game.id}",
             headers={"Origin": "http://localhost:5173"},
         )
+        pixel_preflight = await client.options(
+            "/api/v1/concierge/context-references",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
 
     assert preflight.status_code == 200
     assert "if-none-match" in preflight.headers["access-control-allow-headers"].lower()
     assert response.status_code == 200
     assert response.headers["ETag"] == f'"{game.etag}"'
     assert "etag" in response.headers["access-control-expose-headers"].lower()
+    assert pixel_preflight.status_code == 200
+    assert "post" in pixel_preflight.headers["access-control-allow-methods"].lower()
+    assert "content-type" in pixel_preflight.headers["access-control-allow-headers"].lower()
 
 
 @pytest.mark.anyio

@@ -44,7 +44,13 @@ class IngestionRepository(Protocol):
     ) -> None: ...
 
     def fail(
-        self, run_id: UUID, record_id: str, code: str, correlation_id: UUID
+        self,
+        run_id: UUID,
+        record_id: str,
+        code: str,
+        correlation_id: UUID,
+        *,
+        cause: str | None = None,
     ) -> None: ...
 
     def finish(
