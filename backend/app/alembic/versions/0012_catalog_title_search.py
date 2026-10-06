@@ -11,12 +11,16 @@ depends_on = None
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public")
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public")
+    # Supabase keeps most extensions in `extensions`; local PostgreSQL commonly
+    # installs them in `public`. Resolve both without relocating an existing extension.
+    op.execute("SET LOCAL search_path TO pg_catalog, extensions, public")
     op.execute("""
         CREATE FUNCTION catalog.normalize_title(value text) RETURNS text
         LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+        SET search_path TO pg_catalog, extensions, public
         AS $$
             SELECT trim(regexp_replace(
-                public.unaccent(lower(value)),
+                unaccent(lower(value)),
                 '[^[:alnum:]]+', ' ', 'g'
             ))
         $$

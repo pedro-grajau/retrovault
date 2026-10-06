@@ -884,7 +884,11 @@ def test_postgres_title_search_binds_untrusted_query_and_only_reads_published_ga
 
     assert hits == []
     assert next_cursor is None
-    search_sql, bound_params = engine.connection.executions[1]
+    search_sql, bound_params = next(
+        (sql, params)
+        for sql, params in engine.connection.executions
+        if "WITH search_input AS" in sql
+    )
     assert ":query" in search_sql
     assert untrusted not in search_sql
     assert bound_params["query"] == untrusted
@@ -892,3 +896,15 @@ def test_postgres_title_search_binds_untrusted_query_and_only_reads_published_ga
     assert "g.active" in search_sql
     assert "catalog.normalize_title(g.title)" in search_sql
     assert "similarity(normalized_title, normalized_query)" in search_sql
+    assert "word_similarity(normalized_query, normalized_title)" in search_sql
+
+
+def test_postgres_title_search_validates_cursor_for_punctuation_only_query() -> None:
+    repository = PostgresCatalogRepository(engine=object())  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="invalid_cursor"):
+        repository.search_games(
+            query="!!!",
+            limit=20,
+            cursor="not-a-valid-cursor",
+        )

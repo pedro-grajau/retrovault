@@ -270,9 +270,6 @@ class PostgresCatalogRepository:
         """Search only active published titles with an ordered, keyset cursor."""
         if len(query.strip()) < 2 or len(query) > 100:
             raise ValueError("invalid_search_query")
-        if not any(character.isalnum() for character in query):
-            return [], None
-
         search_context = self._search_context_hash(
             query=query,
             platform=platform,
@@ -282,6 +279,9 @@ class PostgresCatalogRepository:
         decoded = self._search_cursor_decode(cursor)
         if decoded is not None and decoded["context"] != search_context:
             raise ValueError("invalid_cursor")
+        if not any(character.isalnum() for character in query):
+            return [], None
+
         params: dict[str, Any] = {"query": query, "limit": limit + 1}
         clauses = ["g.active"]
         normalized_platform = platform.strip().lower() if platform else None
@@ -332,9 +332,15 @@ class PostgresCatalogRepository:
                     OR strpos(normalized_title, normalized_query) > 0
                     OR to_tsvector('simple', normalized_title)
                        @@ plainto_tsquery('simple', normalized_query)
-                    OR (length(normalized_query) >= 4
-                        AND normalized_title % normalized_query
-                        AND similarity(normalized_title, normalized_query) >= 0.30)
+                    OR (
+                        length(normalized_query) >= 4
+                        AND (
+                            (normalized_title % normalized_query
+                             AND similarity(normalized_title, normalized_query) >= 0.30)
+                            OR (normalized_query <% normalized_title
+                                AND word_similarity(normalized_query, normalized_title) >= 0.30)
+                        )
+                    )
                 )
             ), ranked AS (
                 SELECT matched.*,
@@ -347,7 +353,10 @@ class PostgresCatalogRepository:
                            ELSE 2
                        END AS match_rank,
                        round(
-                           similarity(normalized_title, normalized_query)::numeric,
+                           greatest(
+                               similarity(normalized_title, normalized_query),
+                               word_similarity(normalized_query, normalized_title)
+                           )::numeric,
                            6
                        )::double precision AS title_similarity
                 FROM matched
@@ -358,7 +367,13 @@ class PostgresCatalogRepository:
             LIMIT :limit
         """)
         with self.engine.begin() as connection:
+            connection.execute(
+                text("SET LOCAL search_path TO pg_catalog, extensions, public")
+            )
             connection.execute(text("SET LOCAL pg_trgm.similarity_threshold = 0.30"))
+            connection.execute(
+                text("SET LOCAL pg_trgm.word_similarity_threshold = 0.30")
+            )
             rows = list(connection.execute(statement, params).mappings())
         has_more = len(rows) > limit
         page_rows = rows[:limit]

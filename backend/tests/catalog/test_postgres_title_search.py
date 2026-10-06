@@ -58,17 +58,28 @@ def test_postgres_title_search_ranks_pages_and_stays_under_latency_budget() -> N
 
         rows: list[dict[str, object]] = []
         scenario_titles = [
-            ("Super Mario World", scenario_platform),
-            ("Super Mario World", scenario_platform),
-            ("Super Mario World 2", scenario_platform),
-            ("Super Mario Wurld", scenario_platform),
+            ("Super Mario World", scenario_platform, "Demo"),
+            ("Super Mario World", scenario_platform, "Demo"),
+            ("Super Mario World 2", scenario_platform, "Demo"),
+            ("Super Mario Wurld", scenario_platform, "Demo"),
+            ("The Legend of Zelda A Link to the Past", scenario_platform, "Demo"),
         ]
-        titles = scenario_titles + [
-            (f"Demo RetroVault Game {index:05d}", "SNES" if index % 2 else "PS2")
+        filter_platform = f"story-1.6-filter-{run_id}"
+        filter_titles = [
+            ("Filter Sentinel", scenario_platform, "Demo"),
+            ("Filter Sentinel", scenario_platform, "Action"),
+            ("Filter Sentinel", filter_platform, "Demo"),
+        ]
+        titles = scenario_titles + filter_titles + [
+            (
+                f"Demo RetroVault Game {index:05d}",
+                "SNES" if index % 2 else "PS2",
+                "Action" if index % 4 == 0 else "Demo",
+            )
             for index in range(1, 2501)
         ]
         ids: list[UUID] = []
-        for index, (title, platform) in enumerate(titles):
+        for index, (title, platform, genre) in enumerate(titles):
             game_id = uuid5(NAMESPACE_URL, f"retrovault-story-1.6:{run_id}:{index}")
             ids.append(game_id)
             rows.append(
@@ -78,7 +89,7 @@ def test_postgres_title_search_ranks_pages_and_stays_under_latency_budget() -> N
                     "title": title,
                     "platform": platform,
                     "editorial": json.dumps(
-                        {"attributes": {"title": title, "platform": platform, "genre": "Demo"}}
+                        {"attributes": {"title": title, "platform": platform, "genre": genre}}
                     ),
                     "etag": "a" * 64,
                     "cover_hash": media_hash,
@@ -127,10 +138,53 @@ def test_postgres_title_search_ranks_pages_and_stays_under_latency_budget() -> N
                 break
         assert actual == expected
 
+        long_title_hits, _ = repository.search_games(
+            query="Zelad",
+            limit=5,
+            platform=scenario_platform,
+        )
+        assert [hit.game.title for hit in long_title_hits] == [
+            "The Legend of Zelda A Link to the Past"
+        ]
+
+        filter_ids = ids[5:8]
+        by_platform, _ = repository.search_games(
+            query="Filter Sentinel", limit=20, platform=scenario_platform
+        )
+        by_genre, _ = repository.search_games(
+            query="Filter Sentinel", limit=20, genre="Demo"
+        )
+        by_both, _ = repository.search_games(
+            query="Filter Sentinel",
+            limit=20,
+            platform=scenario_platform,
+            genre="Demo",
+        )
+        assert {hit.game.id for hit in by_platform} == set(filter_ids[:2])
+        assert {hit.game.id for hit in by_genre} == {filter_ids[0], filter_ids[2]}
+        assert [hit.game.id for hit in by_both] == [filter_ids[0]]
+
+        filtered_hits, _ = repository.search_games(
+            query="Demo RetroVault Game",
+            limit=20,
+            platform="SNES",
+            genre="Demo",
+        )
+        assert filtered_hits
+        assert all(hit.game.platform == "SNES" for hit in filtered_hits)
+        assert all(
+            hit.game.editorial["attributes"]["genre"] == "Demo"
+            for hit in filtered_hits
+        )
+
         workloads = {
             "exact": {"query": "Demo RetroVault Game 00001"},
             "fuzzy": {"query": "Demo RetroVault Game 00O01"},
-            "filtered": {"query": "Demo RetroVault Game", "platform": "SNES"},
+            "filtered": {
+                "query": "Demo RetroVault Game",
+                "platform": "SNES",
+                "genre": "Demo",
+            },
             "empty": {"query": "zzqvxjplmnoq"},
         }
         for workload in workloads.values():

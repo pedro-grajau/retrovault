@@ -276,6 +276,46 @@ test("Busca do cabeçalho preserva termo e plataforma e mostra região e ediçã
   expect(requestedSearch?.searchParams.get("platform")).toBe("SNES")
 })
 
+test("Paginação da busca mantém o termo e envia o cursor seguinte", async ({
+  page,
+}) => {
+  await mockVersion(page)
+  let secondPageRequest: URL | undefined
+  await page.route("**/api/v1/catalog/games?*", (route) => {
+    const requestUrl = new URL(route.request().url())
+    if (requestUrl.searchParams.get("cursor") === "search-page-2") {
+      secondPageRequest = requestUrl
+      return route.fulfill({
+        json: listResponse(
+          [
+            offeredGame(
+              "Sonic resultado 2",
+              "baf7123e-4260-4c61-86ea-b18ea7be8a12",
+            ),
+          ],
+          null,
+        ),
+      })
+    }
+    return route.fulfill({
+      json: listResponse([offeredGame("Sonic resultado 1")], "search-page-2"),
+    })
+  })
+
+  await page.goto("/catalog?q=sonic")
+  await expect(
+    page.getByRole("heading", { name: "Sonic resultado 1" }),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "Carregar mais jogos" }).click()
+
+  await expect(
+    page.getByRole("heading", { name: "Sonic resultado 2" }),
+  ).toBeVisible()
+  await expect(page).toHaveURL(/\/catalog\?q=sonic&cursor=search-page-2$/)
+  expect(secondPageRequest?.searchParams.get("q")).toBe("sonic")
+  expect(secondPageRequest?.searchParams.get("cursor")).toBe("search-page-2")
+})
+
 test("Busca curta preserva o valor e não envia consulta; termo especial pode retornar vazio", async ({
   page,
 }) => {
@@ -381,6 +421,38 @@ test("Busca aplica o limite de 100 caracteres Unicode, não unidades UTF-16", as
   ).toBeVisible()
   expect(new Set(requestedTerms)).toEqual(new Set([astralTitle]))
   await expect(page.locator("#catalog-search-error")).toHaveCount(0)
+})
+
+test("Busca longa preserva o texto e orienta a correção", async ({ page }) => {
+  await mockVersion(page)
+  const requestedTerms: string[] = []
+  await page.route("**/api/v1/catalog/games?*", (route) => {
+    const term = new URL(route.request().url()).searchParams.get("q")
+    if (term !== null) requestedTerms.push(term)
+    return route.fulfill({ json: listResponse([]) })
+  })
+  const longTerm = "x".repeat(101)
+
+  await page.goto("/catalog")
+  const catalogSearch = page.getByLabel("Buscar título", { exact: true })
+  await catalogSearch.fill(longTerm)
+  await page.getByRole("button", { name: "Buscar jogos" }).click()
+  await expect(catalogSearch).toHaveValue(longTerm)
+  await expect(
+    page.getByText("Use no máximo 100 caracteres na busca.").first(),
+  ).toBeVisible()
+  await expect(page).toHaveURL("/catalog")
+
+  const headerSearch = page.getByLabel("Buscar título no catálogo")
+  await headerSearch.fill(longTerm)
+  await page.getByRole("button", { name: "Buscar", exact: true }).click()
+  await expect(headerSearch).toHaveValue(longTerm)
+  await expect(headerSearch).toHaveAttribute("aria-invalid", "true")
+  await expect(page.locator("#header-search-error")).toHaveText(
+    "Use no máximo 100 caracteres na busca.",
+  )
+  await expect(page).toHaveURL("/catalog")
+  expect(requestedTerms).toEqual([])
 })
 
 test("Busca curta não invalida a consulta válida que já está carregando", async ({

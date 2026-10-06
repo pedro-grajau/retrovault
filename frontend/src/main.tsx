@@ -337,10 +337,6 @@ function searchLength(value: string): number {
   return Array.from(value).length
 }
 
-function limitSearch(value: string): string {
-  return Array.from(value).slice(0, 100).join("")
-}
-
 function canonicalizeFilters(params: URLSearchParams) {
   const query = params.toString()
   const canonicalUrl = `/catalog${query ? `?${query}` : ""}`
@@ -600,11 +596,10 @@ function CatalogPage() {
               id="filter-search"
               type="search"
               value={draftSearch}
-              maxLength={200}
               aria-invalid={searchError ? true : undefined}
               aria-describedby={`catalog-search-hint${searchError ? " catalog-search-error" : ""}`}
               onChange={(event) => {
-                setDraftSearch(limitSearch(event.target.value))
+                setDraftSearch(event.target.value)
                 setSearchError("")
               }}
             />
@@ -848,11 +843,10 @@ function App() {
               type="search"
               value={headerSearch}
               placeholder="Buscar título"
-              maxLength={200}
               aria-invalid={headerSearchError ? true : undefined}
               aria-describedby={`header-search-hint${headerSearchError ? " header-search-error" : ""}`}
               onChange={(event) => {
-                setHeaderSearch(limitSearch(event.target.value))
+                setHeaderSearch(event.target.value)
                 setHeaderSearchError("")
                 event.currentTarget.setCustomValidity("")
               }}
