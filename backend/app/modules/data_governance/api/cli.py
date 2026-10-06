@@ -43,7 +43,7 @@ def _json_default(value: object) -> str:
     raise TypeError()
 
 
-def _console_id(value: object) -> int:
+def _console_id(value: str | None) -> int:
     try:
         parsed = int(value) if value is not None else None
     except (TypeError, ValueError):
