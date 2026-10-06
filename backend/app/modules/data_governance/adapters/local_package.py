@@ -127,6 +127,8 @@ class LocalPackage:
                 for value in (source, version, actor)
             ):
                 raise ValueError()
+            if source.casefold() == "retroachievements":
+                raise ValueError()
             if actor != "Eduardo":
                 raise ValueError()
             captured_at_value = data["captured_at"]
@@ -172,6 +174,7 @@ class LocalPackage:
             UnicodeError,
             AttributeError,
             KeyError,
+            RecursionError,
             TypeError,
             ValueError,
         ) as exc:
@@ -237,7 +240,7 @@ class LocalPackage:
                                         media_cache[path] = None
                                         add(str(exc).encode())
                                 media_bytes.append((path, media_payload))
-                    except (UnicodeError, ValueError):
+                    except (UnicodeError, ValueError, RecursionError):
                         pass
                     records.append(
                         SnapshotRecord(payload, media_bytes=tuple(media_bytes))

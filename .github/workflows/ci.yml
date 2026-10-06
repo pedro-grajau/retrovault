@@ -14,7 +14,7 @@ jobs:
       - run: uv sync --project backend --frozen
       - run: uv run --project backend ruff check backend/app backend/tests
       - run: uv run --project backend ty check backend/app
-      - run: uv run --project backend pytest backend/tests/architecture backend/tests/api backend/tests/contract
+      - run: uv run --project backend pytest backend/tests
       - run: uv run alembic upgrade head --sql
         working-directory: backend
       - run: bun install --frozen-lockfile

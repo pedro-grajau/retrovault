@@ -67,3 +67,45 @@ class PublishedCatalog(Protocol):
         idempotency_key: str,
         expected_etag: str,
     ) -> dict[str, Any]: ...
+
+
+class CatalogPublicationRepository(Protocol):
+    """Write-side port consumed by the application publisher."""
+
+    def current_etag(
+        self, source: str, source_record_id: str, connection: Any | None = None
+    ) -> str | None: ...
+
+    def publish(
+        self,
+        candidate: dict[str, Any],
+        *,
+        actor: str,
+        reason: str,
+        idempotency_key: str,
+        expected_etag: str,
+        published_etag: str | None = None,
+        connection: Any | None = None,
+    ) -> dict[str, Any]: ...
+
+    def retire(
+        self,
+        game_id: UUID,
+        *,
+        actor: str,
+        reason: str,
+        idempotency_key: str,
+        expected_etag: str,
+        connection: Any | None = None,
+    ) -> dict[str, Any]: ...
+
+    def withdraw(
+        self,
+        game_id: UUID,
+        *,
+        actor: str,
+        reason: str,
+        idempotency_key: str,
+        expected_etag: str,
+        connection: Any | None = None,
+    ) -> dict[str, Any]: ...

@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright"
 import type { Page } from "@playwright/test"
 import { expect, test } from "@playwright/test"
 
@@ -36,6 +37,8 @@ function offer(mode: "purchase" | "rental" = "purchase") {
     available_units: 2,
     demo_rank: 1,
     sandbox: true,
+    sku_code: `SKU-${mode}`,
+    units: [],
   }
 }
 
@@ -52,6 +55,14 @@ function offeredGame(
 
 function listResponse(items: unknown[], next_cursor: string | null = null) {
   return { items, next_cursor, commerce_status: "available" }
+}
+
+function detailGame(title: string, offers: unknown[] = [offer("purchase")]) {
+  return {
+    ...editorialGame(title),
+    commerce_status: "available",
+    offers,
+  }
 }
 
 async function mockVersion(page: Page) {
@@ -492,4 +503,328 @@ test("Busca curta não invalida a consulta válida que já está carregando", as
   await expect(
     page.getByText("Digite pelo menos 2 caracteres para buscar."),
   ).toBeVisible()
+})
+
+test("Home ignora facetas antigas quando a retentativa termina primeiro", async ({
+  page,
+}) => {
+  await mockVersion(page)
+  let retryStarted = false
+  let releaseOldFacets: (() => void) | undefined
+  const oldFacets = new Promise<void>((resolve) => {
+    releaseOldFacets = resolve
+  })
+  await page.route("**/api/v1/catalog/facets", async (route) => {
+    if (!retryStarted) {
+      await oldFacets
+      try {
+        await route.fulfill({ json: { platforms: ["SNES"], genres: [] } })
+      } catch {
+        // The retry aborts this older request.
+      }
+      return
+    }
+    await route.fulfill({ json: { platforms: ["N64"], genres: [] } })
+  })
+  await page.route("**/api/v1/catalog/games?*", (route) => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get("sort") !== "demo_popular") {
+      return route.fulfill({ json: listResponse([]) })
+    }
+    return retryStarted
+      ? route.fulfill({ json: listResponse([offeredGame("Novo popular")]) })
+      : route.fulfill({ status: 503, body: "" })
+  })
+
+  await page.goto("/")
+  await page.getByRole("button", { name: "Tentar novamente" }).waitFor()
+  retryStarted = true
+  await page.getByRole("button", { name: "Tentar novamente" }).click()
+  await expect(
+    page.getByRole("link", { name: "N64", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("heading", { name: "Novo popular" }),
+  ).toBeVisible()
+  releaseOldFacets?.()
+  await expect(
+    page.getByRole("link", { name: "N64", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("link", { name: "SNES", exact: true }),
+  ).toHaveCount(0)
+})
+
+test("Detalhe mostra ofertas mistas e os fatos das unidades físicas", async ({
+  page,
+}) => {
+  await mockVersion(page)
+  const purchase = {
+    ...offer("purchase"),
+    available_units: 1,
+    units: [
+      {
+        condition_summary: "Muito bom",
+        defects: ["Risco no estojo"],
+        included_items: ["Cartucho", "Manual"],
+      },
+    ],
+  }
+  const rental = { ...offer("rental"), available_units: 0, units: [] }
+  await page.route(`**/api/v1/catalog/games/${gameId}`, (route) =>
+    route.fulfill({ json: detailGame("Jogo detalhado", [purchase, rental]) }),
+  )
+  await page.route(`**/api/v1/catalog/games/${gameId}/box-art`, (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  )
+
+  await page.goto(`/games/${gameId}`)
+
+  await expect(
+    page.getByRole("heading", { name: "Jogo detalhado" }),
+  ).toBeVisible()
+  await expect(page.getByText("1 unidade disponível")).toBeVisible()
+  await expect(page.getByText("Indisponível no momento")).toBeVisible()
+  await expect(page.getByText("Risco no estojo")).toBeVisible()
+  await expect(page.getByText("Cartucho, Manual")).toBeVisible()
+})
+
+test("Detalhe atualiza disponibilidade, oculta preços no erro e trata 404", async ({
+  page,
+}) => {
+  await mockVersion(page)
+  let failRefresh: "none" | "unavailable" | "missing" = "none"
+  await page.route(`**/api/v1/catalog/games/${gameId}`, (route) => {
+    if (failRefresh === "unavailable")
+      return route.fulfill({ status: 503, body: "" })
+    if (failRefresh === "missing")
+      return route.fulfill({ status: 404, body: "" })
+    return route.fulfill({ json: detailGame("Jogo atualizado") })
+  })
+  await page.route(`**/api/v1/catalog/games/${gameId}/box-art`, (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  )
+
+  await page.goto(`/games/${gameId}`)
+  await expect(
+    page.getByRole("heading", { name: "Jogo atualizado" }),
+  ).toBeVisible()
+  failRefresh = "unavailable"
+  await page.getByRole("button", { name: "Atualizar disponibilidade" }).click()
+  await expect(
+    page.getByText("Não foi possível atualizar os detalhes do jogo.", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByText(
+      /Não é possível confirmar condição, preço ou disponibilidade agora/,
+    ),
+  ).toBeVisible()
+  await expect(page.getByText(/49,90/)).toHaveCount(0)
+
+  failRefresh = "missing"
+  await page.getByRole("button", { name: "Atualizar disponibilidade" }).click()
+  await expect(
+    page.getByRole("heading", { name: "Jogo não encontrado." }),
+  ).toBeVisible()
+})
+
+test("Detalhe ignora resposta de refresh antiga que chega depois da nova", async ({
+  page,
+}) => {
+  await mockVersion(page)
+  await page.addInitScript(() => {
+    const original = window.setInterval
+    window.setInterval = new Proxy(original, {
+      apply(target, thisArg, args: Parameters<typeof window.setInterval>) {
+        if (args[1] === 30_000) Reflect.set(window, "__detailRefresh", args[0])
+        return Reflect.apply(target, thisArg, args)
+      },
+    })
+  })
+  let raceMode = false
+  let raceCalls = 0
+  let releaseOld: (() => void) | undefined
+  const oldResponse = new Promise<void>((resolve) => {
+    releaseOld = resolve
+  })
+  await page.route(`**/api/v1/catalog/games/${gameId}`, async (route) => {
+    if (!raceMode) return route.fulfill({ json: detailGame("Jogo", [offer()]) })
+    raceCalls += 1
+    if (raceCalls === 1) {
+      await oldResponse
+      return route.fulfill({
+        json: detailGame("Jogo", [{ ...offer(), available_units: 0 }]),
+      })
+    }
+    return route.fulfill({
+      json: detailGame("Jogo", [{ ...offer(), available_units: 4 }]),
+    })
+  })
+  await page.route(`**/api/v1/catalog/games/${gameId}/box-art`, (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  )
+
+  await page.goto(`/games/${gameId}`)
+  await expect(page.getByText("2 unidades disponíveis")).toBeVisible()
+  raceMode = true
+  await page.evaluate(() => {
+    const refresh = Reflect.get(window, "__detailRefresh")
+    if (typeof refresh === "function") refresh()
+  })
+  await expect.poll(() => raceCalls).toBe(1)
+  await page.evaluate(() => {
+    const refresh = Reflect.get(window, "__detailRefresh")
+    if (typeof refresh === "function") refresh()
+  })
+  await expect(page.getByText("4 unidades disponíveis")).toBeVisible()
+  releaseOld?.()
+  await expect(page.getByText("4 unidades disponíveis")).toBeVisible()
+  await expect(page.getByText("Indisponível no momento")).toHaveCount(0)
+})
+
+test("Pixel prepara referência contextual e oferece os dois destinos WhatsApp", async ({
+  page,
+}) => {
+  await mockVersion(page)
+  await page.route(`**/api/v1/catalog/games/${gameId}`, (route) =>
+    route.fulfill({ json: detailGame("Jogo para Pixel") }),
+  )
+  await page.route(`**/api/v1/catalog/games/${gameId}/box-art`, (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  )
+  let body: unknown
+  await page.route("**/api/v1/concierge/context-references", async (route) => {
+    body = route.request().postDataJSON()
+    await route.fulfill({
+      status: 201,
+      json: {
+        reference: "v1.context.signature",
+        expires_at: "2099-10-01T12:00:00Z",
+        whatsapp_url: "https://wa.me/5500000000000?text=Pixel",
+        web_whatsapp_url:
+          "https://web.whatsapp.com/send?phone=5500000000000&text=Pixel",
+      },
+    })
+  })
+
+  await page.goto(`/games/${gameId}`)
+  await page
+    .getByRole("button", { name: "Preparar conversa com Pixel" })
+    .click()
+
+  await expect(page.getByText("Contexto do jogo preparado.")).toBeVisible()
+  expect(body).toEqual({ game_id: gameId })
+  await expect(
+    page.getByRole("link", { name: "Continuar no WhatsApp" }),
+  ).toHaveAttribute("href", /wa\.me/)
+  await expect(
+    page.getByRole("link", { name: "Usar WhatsApp Web" }),
+  ).toHaveAttribute("href", /web\.whatsapp\.com/)
+})
+
+test("Pixel prepara conversa global sem anexar jogo", async ({ page }) => {
+  await mockVersion(page)
+  await page.route("**/api/v1/catalog/facets", (route) =>
+    route.fulfill({ json: { platforms: [], genres: [] } }),
+  )
+  await page.route("**/api/v1/catalog/games?*", (route) =>
+    route.fulfill({ json: listResponse([]) }),
+  )
+  let body: unknown
+  await page.route("**/api/v1/concierge/context-references", async (route) => {
+    body = route.request().postDataJSON()
+    await route.fulfill({
+      status: 201,
+      json: {
+        reference: null,
+        expires_at: null,
+        whatsapp_url: "https://wa.me/5500000000000?text=Pixel",
+        web_whatsapp_url:
+          "https://web.whatsapp.com/send?phone=5500000000000&text=Pixel",
+      },
+    })
+  })
+
+  await page.goto("/")
+  await page
+    .getByRole("button", { name: "Preparar conversa com Pixel" })
+    .click()
+
+  await expect(page.getByText("Conversa preparada.")).toBeVisible()
+  expect(body).toEqual({})
+})
+
+test("Detalhe mantém acessibilidade automatizada em viewport estreita e forced colors", async ({
+  page,
+}) => {
+  await mockVersion(page)
+  await page.setViewportSize({ width: 320, height: 900 })
+  await page.route(`**/api/v1/catalog/games/${gameId}`, (route) =>
+    route.fulfill({ json: detailGame("Jogo acessível") }),
+  )
+  await page.route(`**/api/v1/catalog/games/${gameId}/box-art`, (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  )
+
+  await page.goto(`/games/${gameId}`)
+  await expect(
+    page.getByRole("heading", { name: "Jogo acessível" }),
+  ).toBeVisible()
+  await page.keyboard.press("Tab")
+  await expect(
+    page.getByRole("link", { name: "Pular para o conteúdo" }),
+  ).toBeFocused()
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  expect(accessibility.violations).toEqual([])
+  const narrowLayout = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }))
+  expect(narrowLayout.scrollWidth).toBeLessThanOrEqual(narrowLayout.clientWidth)
+  await page.emulateMedia({ forcedColors: "active" })
+  expect(
+    await page.evaluate(
+      () => window.matchMedia("(forced-colors: active)").matches,
+    ),
+  ).toBe(true)
+  const updateButton = page.getByRole("button", {
+    name: "Atualizar disponibilidade",
+  })
+  await expect(updateButton).toBeVisible()
+  const forcedColors = await updateButton.evaluate((button) => {
+    const resolveSystemColor = (value: string) => {
+      const probe = document.createElement("span")
+      probe.style.color = value
+      document.body.append(probe)
+      const color = getComputedStyle(probe).color
+      probe.remove()
+      return color
+    }
+    const style = getComputedStyle(button)
+    const availableStatus = document.querySelector(".availability.available")
+    return {
+      borderColor: style.borderTopColor,
+      canvasText: resolveSystemColor("CanvasText"),
+      outlineColor: style.outlineColor,
+      highlight: resolveSystemColor("Highlight"),
+      outlineWidth: style.outlineWidth,
+      statusColor: availableStatus
+        ? getComputedStyle(availableStatus).color
+        : "",
+      linkText: resolveSystemColor("LinkText"),
+    }
+  })
+  expect(forcedColors.borderColor).toBe(forcedColors.canvasText)
+  expect(forcedColors.statusColor).toBe(forcedColors.linkText)
+  await updateButton.focus()
+  const focusOutline = await updateButton.evaluate((button) => {
+    const style = getComputedStyle(button)
+    return { color: style.outlineColor, width: style.outlineWidth }
+  })
+  expect(focusOutline).toEqual({
+    color: forcedColors.highlight,
+    width: "3px",
+  })
 })

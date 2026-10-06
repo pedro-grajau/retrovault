@@ -15,7 +15,9 @@ from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepo
 from app.modules.catalog.api.router import configure_services
 from app.modules.catalog.api.router import router as catalog_router
 from app.modules.commerce.adapters.postgres_offers import PostgresOfferReader
-from app.modules.concierge.api.router import configure_services as configure_concierge_services
+from app.modules.concierge.api.router import (
+    configure_services as configure_concierge_services,
+)
 from app.modules.concierge.api.router import router as concierge_router
 from app.platform.config.settings import settings
 

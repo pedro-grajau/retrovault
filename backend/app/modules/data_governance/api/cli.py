@@ -193,9 +193,9 @@ def main(argv: list[str] | None = None) -> int:
                 expected_batch_count=args.expected_batch_count,
                 batch_size=args.batch_size,
             )
-            from app.modules.catalog.application.publisher import CatalogPublisher
+            from app.composition import build_catalog_publisher
 
-            publisher = CatalogPublisher(engine)
+            publisher = build_catalog_publisher(engine)
             rule_version = "editorial-v3"
             reason = (
                 "Publicação do catálogo privado de portfólio conforme declaração de "
@@ -315,9 +315,9 @@ def main(argv: list[str] | None = None) -> int:
                 args.rule_version,
             )
         elif args.command == "approve":
-            from app.modules.catalog.application.publisher import CatalogPublisher
+            from app.composition import build_catalog_publisher
 
-            publisher = CatalogPublisher(engine)
+            publisher = build_catalog_publisher(engine)
             with engine.begin() as connection:
                 candidate = repository.lock_review_candidate(
                     connection,
@@ -340,10 +340,10 @@ def main(argv: list[str] | None = None) -> int:
                     connection=connection,
                 )
         else:
-            from app.modules.catalog.application.publisher import CatalogPublisher
+            from app.composition import build_catalog_publisher
 
             with engine.begin() as connection:
-                result = CatalogPublisher(engine).withdraw(
+                result = build_catalog_publisher(engine).withdraw(
                     args.public_id,
                     actor="Eduardo",
                     reason=args.reason,

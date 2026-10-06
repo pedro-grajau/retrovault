@@ -262,7 +262,7 @@ function PixelEntry({ gameId }: { gameId?: string }) {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Abrir WhatsApp
+            Continuar no WhatsApp
           </a>
           <a
             className="text-link"
@@ -270,7 +270,7 @@ function PixelEntry({ gameId }: { gameId?: string }) {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Usar WhatsApp Web
+            Usar WhatsApp Web (abre uma nova guia)
           </a>
         </fieldset>
       )}
@@ -296,13 +296,21 @@ function HomePage() {
   )
   const [platforms, setPlatforms] = useState<string[]>([])
   const [facetsState, setFacetsState] = useState<LoadState>("loading")
+  const homeRequestSequence = useRef(0)
+  const homeController = useRef<AbortController | null>(null)
 
   const loadHome = useCallback(() => {
+    const sequence = ++homeRequestSequence.current
+    homeController.current?.abort()
     const controller = new AbortController()
+    homeController.current = controller
+    const isCurrent = () =>
+      sequence === homeRequestSequence.current && !controller.signal.aborted
     setPopularState("loading")
     setPopularMessage("Carregando jogos populares disponíveis.")
     void getPopularGames(controller.signal)
       .then((page) => {
+        if (!isCurrent()) return
         setPopular(page.items)
         setPopularState("ready")
         setPopularMessage(
@@ -312,6 +320,7 @@ function HomePage() {
         )
       })
       .catch(() => {
+        if (!isCurrent()) return
         setPopular([])
         setPopularState("error")
         setPopularMessage(
@@ -321,17 +330,25 @@ function HomePage() {
     setFacetsState("loading")
     void getCatalogFacets(controller.signal)
       .then((facets) => {
+        if (!isCurrent()) return
         setPlatforms(facets.platforms)
         setFacetsState("ready")
       })
       .catch(() => {
+        if (!isCurrent()) return
         setPlatforms([])
         setFacetsState("error")
       })
-    return () => controller.abort()
   }, [])
 
-  useEffect(() => loadHome(), [loadHome])
+  useEffect(() => {
+    loadHome()
+    return () => {
+      homeRequestSequence.current += 1
+      homeController.current?.abort()
+      homeController.current = null
+    }
+  }, [loadHome])
 
   return (
     <main id="content" className="home-page">
@@ -454,15 +471,16 @@ function HomePage() {
 function GameOffers({
   game,
   refreshing,
+  refreshError,
   onRefresh,
 }: {
   game: GameResponse
   refreshing: boolean
+  refreshError: boolean
   onRefresh: () => void
 }) {
-  const availableOffers = (game.offers ?? []).filter(
-    (offer) => offer.available_units > 0,
-  )
+  const offers = game.offers ?? []
+  const availableOffers = offers.filter((offer) => offer.available_units > 0)
 
   return (
     <section className="detail-offers" aria-labelledby="offer-title">
@@ -482,11 +500,15 @@ function GameOffers({
         </button>
       </div>
 
-      {game.commerce_status === "unavailable" ? (
+      {refreshError || game.commerce_status === "unavailable" ? (
         <div className="commerce-banner" role="status">
-          <strong>Dados comerciais indisponíveis.</strong> Não é possível
-          confirmar condição, preço ou disponibilidade agora. Tente atualizar
-          mais tarde.
+          <strong>
+            {refreshError
+              ? "Não foi possível atualizar os detalhes do jogo."
+              : "Dados comerciais indisponíveis."}
+          </strong>{" "}
+          Não é possível confirmar condição, preço ou disponibilidade agora.
+          Tente atualizar mais tarde.
         </div>
       ) : availableOffers.length === 0 ? (
         <div className="state-panel detail-unavailable" role="status">
@@ -497,7 +519,7 @@ function GameOffers({
         </div>
       ) : (
         <div className="detail-offer-list">
-          {availableOffers.map((offer) => (
+          {offers.map((offer) => (
             <article className="detail-offer" key={offer.id}>
               <div className="offer-overview">
                 <div>
@@ -509,15 +531,24 @@ function GameOffers({
                 </div>
                 <strong className="detail-price">{formatPrice(offer)}</strong>
               </div>
-              <p className="availability available">
-                {offer.available_units}{" "}
-                {offer.available_units === 1
-                  ? "unidade disponível"
-                  : "unidades disponíveis"}
+              <p
+                className={
+                  offer.available_units > 0
+                    ? "availability available"
+                    : "availability unavailable"
+                }
+              >
+                {offer.available_units > 0
+                  ? `${offer.available_units} ${
+                      offer.available_units === 1
+                        ? "unidade disponível"
+                        : "unidades disponíveis"
+                    }`
+                  : "Indisponível no momento"}
               </p>
-              <div className="physical-unit-list">
-                {offer.units.length ? (
-                  offer.units.map((unit, index) => (
+              {offer.units.length > 0 ? (
+                <div className="physical-unit-list">
+                  {offer.units.map((unit, index) => (
                     <section
                       className="physical-unit"
                       key={`${offer.id}-${index}`}
@@ -552,8 +583,10 @@ function GameOffers({
                         </div>
                       </dl>
                     </section>
-                  ))
-                ) : (
+                  ))}
+                </div>
+              ) : offer.available_units > 0 ? (
+                <div className="physical-unit-list">
                   <section className="physical-unit">
                     <h4>Detalhes da unidade</h4>
                     <dl className="unit-facts">
@@ -571,8 +604,8 @@ function GameOffers({
                       </div>
                     </dl>
                   </section>
-                )}
-              </div>
+                </div>
+              ) : null}
             </article>
           ))}
         </div>
@@ -584,17 +617,22 @@ function GameOffers({
 function GameDetailPage({ gameId }: { gameId: string }) {
   const [game, setGame] = useState<GameResponse | null>(null)
   const gameRef = useRef<GameResponse | null>(null)
+  const refreshSequence = useRef(0)
   const [pageState, setPageState] = useState<
     "loading" | "ready" | "error" | "missing"
   >("loading")
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState(false)
   const [announcement, setAnnouncement] = useState("")
 
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
+      const sequence = ++refreshSequence.current
       setRefreshing(true)
       try {
         const nextGame = await getGameDetails(gameId, signal)
+        if (signal?.aborted || sequence !== refreshSequence.current) return
+        setRefreshError(false)
         const previous = gameRef.current
         const previousCommerce = previous
           ? JSON.stringify({
@@ -615,13 +653,15 @@ function GameDetailPage({ gameId }: { gameId: string }) {
             : "",
         )
       } catch (cause) {
-        if (signal?.aborted) return
+        if (signal?.aborted || sequence !== refreshSequence.current) return
         if (cause instanceof CatalogApiError && cause.status === 404) {
+          setRefreshError(false)
           gameRef.current = null
           setGame(null)
           setPageState("missing")
           setAnnouncement("Este jogo não está mais publicado.")
         } else if (gameRef.current) {
+          setRefreshError(true)
           const withoutCommercialFacts: GameResponse = {
             ...gameRef.current,
             commerce_status: "unavailable",
@@ -630,7 +670,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
           gameRef.current = withoutCommercialFacts
           setGame(withoutCommercialFacts)
           setAnnouncement(
-            "Não foi possível atualizar os dados comerciais. Preço e disponibilidade foram ocultados até uma nova consulta.",
+            "Não foi possível atualizar os detalhes do jogo. Preço e disponibilidade foram ocultados até uma nova consulta.",
           )
         } else {
           setPageState("error")
@@ -639,7 +679,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
           )
         }
       } finally {
-        setRefreshing(false)
+        if (sequence === refreshSequence.current) setRefreshing(false)
       }
     },
     [gameId],
@@ -650,6 +690,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
     void refresh(controller.signal)
     const interval = window.setInterval(() => void refresh(), 30_000)
     return () => {
+      refreshSequence.current += 1
       controller.abort()
       window.clearInterval(interval)
     }
@@ -747,6 +788,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
         <GameOffers
           game={game}
           refreshing={refreshing}
+          refreshError={refreshError}
           onRefresh={() => void refresh()}
         />
         <PixelEntry gameId={game.id} />

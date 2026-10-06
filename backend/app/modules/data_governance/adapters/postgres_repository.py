@@ -18,6 +18,7 @@ from app.modules.data_governance.domain.models import (
     Manifest,
     Right,
     SourceResponse,
+    contains_invalid_postgres_text,
 )
 from app.modules.data_governance.domain.normalization import (
     Candidate,
@@ -209,6 +210,7 @@ class PostgresRepository:
                     text("""
                         SELECT e.id AS evidence_id, e.raw_payload,
                                mr.media_path, mr.role, mr.storage_right,
+                               mr.publication_right,
                                mr.attribution, pm.content
                         FROM data_governance.run_evidence re
                         JOIN data_governance.raw_evidence e ON e.id=re.evidence_id
@@ -237,6 +239,7 @@ class PostgresRepository:
                     content = bytes(row["content"]) if row["content"] is not None else None
                     if (
                         row["storage_right"] != "confirmed"
+                        or row["publication_right"] == "denied"
                         or not isinstance(row["attribution"], str)
                         or not row["attribution"].strip()
                         or not valid_image(content)
@@ -583,7 +586,8 @@ class PostgresRepository:
                     for item in connection.execute(
                         text("""
                     SELECT mr.media_path, mr.role, mr.storage_right,
-                       CASE WHEN pud.scope='loopback_only' THEN 'confirmed'
+                       CASE WHEN pud.scope='loopback_only'
+                                  AND mr.publication_right <> 'denied' THEN 'confirmed'
                             ELSE mr.publication_right END AS publication_right,
                            mr.publication_right AS source_publication_right,
                            mr.attribution, pm.content IS NOT NULL AS content_available,
@@ -942,11 +946,13 @@ class PostgresRepository:
         media_rows = list(connection.execute(
             text("""
                 SELECT mr.media_path, mr.role, mr.storage_right,
-                       CASE WHEN pud.scope='loopback_only' THEN 'confirmed'
+                       CASE WHEN pud.scope='loopback_only'
+                                  AND mr.publication_right <> 'denied' THEN 'confirmed'
                             ELSE mr.publication_right END AS publication_right,
                        mr.publication_right AS source_publication_right,
                        mr.attribution,
-                       CASE WHEN pud.scope='loopback_only' THEN true
+                       CASE WHEN pud.scope='loopback_only'
+                                  AND mr.publication_right <> 'denied' THEN true
                             ELSE mr.eligible END AS eligible,
                        pm.content_hash, pm.content,
                        pud.id AS rights_decision_id, pud.scope AS rights_scope,
@@ -1225,6 +1231,7 @@ class PostgresRepository:
             or not isinstance(reason, str)
             or not reason.strip()
             or len(reason) > 1000
+            or contains_invalid_postgres_text(reason)
             or (
                 field == "included_items"
                 and (
@@ -1233,9 +1240,16 @@ class PostgresRepository:
                     or not all(isinstance(item, str) for item in value)
                     or sum(len(item) for item in value if isinstance(item, str))
                     > MAX_CORRECTION_TEXT
+                    or contains_invalid_postgres_text(value)
                 )
             )
-            or (field != "included_items" and not isinstance(value, str))
+            or (
+                field != "included_items"
+                and (
+                    not isinstance(value, str)
+                    or contains_invalid_postgres_text(value)
+                )
+            )
             or (
                 field == "release_date_granularity"
                 and value not in {"year", "month", "day"}

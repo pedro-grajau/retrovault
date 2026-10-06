@@ -356,6 +356,13 @@ export type listFacetsApiV1CatalogFacetsGetData = {
     url: '/api/v1/catalog/facets';
 };
 
+export type listFacetsApiV1CatalogFacetsGetErrors = {
+    /**
+     * Catalog unavailable.
+     */
+    503: unknown;
+};
+
 export type listFacetsApiV1CatalogFacetsGetResponses = {
     /**
      * Successful Response
@@ -407,7 +414,7 @@ export type listGamesApiV1CatalogGamesGetErrors = {
      */
     422: HTTPValidationError;
     /**
-     * Commerce indisponível.
+     * Commerce or Catalog unavailable.
      */
     503: unknown;
 };
@@ -498,6 +505,10 @@ export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors = {
      * Validation Error
      */
     422: HTTPValidationError;
+    /**
+     * Catalog unavailable.
+     */
+    503: unknown;
 };
 
 export type getBoxArtApiV1CatalogGamesGameIdBoxArtGetError = getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors[keyof getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors];

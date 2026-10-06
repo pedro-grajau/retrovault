@@ -205,9 +205,16 @@ def _game_response(
     )
 
 
-@router.get("/facets", response_model=GameFacetsResponse)
+@router.get(
+    "/facets",
+    response_model=GameFacetsResponse,
+    responses={503: {"description": "Catalog unavailable."}},
+)
 async def list_facets() -> GameFacetsResponse:
-    facets = _catalog_service().list_facets()
+    try:
+        facets = _catalog_service().list_facets()
+    except CatalogReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="catalog_unavailable") from exc
     return GameFacetsResponse(**facets)
 
 
@@ -215,7 +222,9 @@ async def list_facets() -> GameFacetsResponse:
     "/games",
     response_model=GameListResponse,
     response_model_exclude_none=True,
-    responses={503: {"description": "Commerce indisponível."}},
+    responses={
+        503: {"description": "Commerce or Catalog unavailable."},
+    },
 )
 async def list_games(
     limit: int = Query(default=20, ge=1, le=100),
@@ -240,6 +249,8 @@ async def list_games(
         )
     except CommerceUnavailable as exc:
         raise HTTPException(status_code=503, detail="commerce_unavailable") from exc
+    except CatalogReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="catalog_unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid_cursor") from exc
     return GameListResponse(
@@ -362,13 +373,17 @@ def _if_none_match(value: str | None, etag: str) -> bool:
             },
         },
         404: {"description": "Published box art not found."},
+        503: {"description": "Catalog unavailable."},
     },
 )
 async def get_box_art(
     game_id: UUID,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
-    cover = _catalog_service().get_cover(game_id)
+    try:
+        cover = _catalog_service().get_cover(game_id)
+    except CatalogReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="catalog_unavailable") from exc
     if cover is None:
         raise HTTPException(status_code=404, detail="not_found")
     content, content_type, content_hash = cover

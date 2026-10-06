@@ -89,6 +89,19 @@ def test_record_validation_rejects_commerce_and_invalid_rights() -> None:
         parse_record("x", '{"id":"x","attributes":{"title":"ok","title":"outro"}}')
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"id":"x","attributes":{"title":"bad\\u0000text"}}',
+        '{"id":"x","attributes":{"title":"bad\\ud800text"}}',
+        '{"id":"x","attributes":{"extra":' + "[" * 1200 + "0" + "]" * 1200 + "}}",
+    ],
+)
+def test_record_rejects_unrepresentable_or_overdeep_json(raw: str) -> None:
+    with pytest.raises(InvalidRecord, match="invalid_record"):
+        parse_record("x", raw)
+
+
 def test_incomplete_editorial_record_remains_raw_evidence() -> None:
     record = parse_record("x", '{"id":"x","attributes":{"platform":"SNES"}}')
     assert record.attributes == ("platform",)
@@ -488,6 +501,22 @@ def test_manifest_rejects_extra_and_duplicate_keys(tmp_path: Path) -> None:
         original.replace('"actor": "Eduardo"', '"actor": "Eduardo", "actor": "outro"')
     )
     with pytest.raises(PackageError):
+        LocalPackage(package).snapshot()
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["retroachievements", "RetroAchievements", "RETROACHIEVEMENTS"],
+)
+def test_local_manifest_cannot_claim_retroachievements(
+    tmp_path: Path, source: str
+) -> None:
+    package = tmp_path / "package"
+    _package(package, source, "spoofed-v1")
+
+    from app.modules.data_governance.ports.source import PackageError
+
+    with pytest.raises(PackageError, match="invalid_manifest"):
         LocalPackage(package).snapshot()
 
 

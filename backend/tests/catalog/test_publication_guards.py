@@ -6,9 +6,11 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import Connection
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepository
 from app.modules.catalog.domain.publication import PublicationConflict
+from app.modules.catalog.ports.repository import CatalogReadUnavailable
 
 
 class NoReplayCatalogRepository(PostgresCatalogRepository):
@@ -29,6 +31,14 @@ class ReplayedCatalogRepository(PostgresCatalogRepository):
         connection: Connection | None,
     ) -> dict[str, object] | None:
         return {"game_id": "stable-id", "version": 1, "state": "published"}
+
+
+class FailedReadEngine:
+    def connect(self):
+        raise SQLAlchemyError("database unavailable")
+
+    def begin(self):
+        raise SQLAlchemyError("database unavailable")
 
 
 def _candidate(**overrides):
@@ -78,6 +88,23 @@ def test_publication_requires_confirmed_cover_rights_and_attribution() -> None:
             "storage_right": "confirmed",
             "publication_right": "unknown",
             "attribution": "",
+        }
+    )
+
+    with pytest.raises(PublicationConflict, match="candidate_etag_or_cover_invalid"):
+        _publish(candidate)
+
+
+def test_private_use_decision_cannot_override_explicit_publication_denial() -> None:
+    candidate = _candidate(
+        cover={
+            "content": b"bytes",
+            "storage_right": "confirmed",
+            "publication_right": "confirmed",
+            "source_publication_right": "denied",
+            "rights_decision_id": uuid4(),
+            "rights_scope": "loopback_only",
+            "attribution": "RetroAchievements",
         }
     )
 
@@ -137,6 +164,21 @@ def test_catalog_cursor_round_trip_and_rejects_malformed_values() -> None:
             PostgresCatalogRepository._cursor_decode(value)
 
 
+def test_all_catalog_read_adapters_translate_database_failures() -> None:
+    repository = PostgresCatalogRepository(FailedReadEngine())
+    reads = (
+        repository.list_facets,
+        lambda: repository.list_games(limit=10),
+        lambda: repository.search_games(query="jogo", limit=10),
+        lambda: repository.get_game(uuid4()),
+        lambda: repository.get_cover(uuid4()),
+    )
+
+    for read in reads:
+        with pytest.raises(CatalogReadUnavailable):
+            read()
+
+
 class ReadResult:
     def mappings(self):
         return self
@@ -164,6 +206,24 @@ class ReadEngine:
     @contextmanager
     def connect(self):
         yield ReadConnection(self.queries)
+
+
+class FailedQueryConnection:
+    def execute(self, statement, parameters=None):
+        raise SQLAlchemyError("query unavailable")
+
+
+class FailedQueryEngine:
+    @contextmanager
+    def connect(self):
+        yield FailedQueryConnection()
+
+
+def test_catalog_read_adapter_translates_query_execution_failures() -> None:
+    repository = PostgresCatalogRepository(FailedQueryEngine())
+
+    with pytest.raises(CatalogReadUnavailable):
+        repository.list_facets()
 
 
 def test_catalog_pagination_uses_immutable_uuid_key() -> None:

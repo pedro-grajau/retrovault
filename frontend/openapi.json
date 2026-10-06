@@ -652,6 +652,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "503": {
+            "description": "Catalog unavailable."
           }
         },
         "summary": "List Facets",
@@ -804,7 +807,7 @@
             "description": "Validation Error"
           },
           "503": {
-            "description": "Commerce indispon\u00edvel."
+            "description": "Commerce or Catalog unavailable."
           }
         },
         "summary": "List Games",
@@ -1003,6 +1006,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Catalog unavailable."
           }
         },
         "summary": "Get Box Art",

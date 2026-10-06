@@ -51,12 +51,7 @@ def _seed_units(
             VALUES (:unit_id, :offer_id, :state, :condition_summary,
                     CAST(:defects AS jsonb), CAST(:included_items AS jsonb),
                     :created_at)
-            ON CONFLICT (id) DO UPDATE
-            SET offer_id = EXCLUDED.offer_id,
-                state = EXCLUDED.state,
-                condition_summary = EXCLUDED.condition_summary,
-                defects = EXCLUDED.defects,
-                included_items = EXCLUDED.included_items
+            ON CONFLICT (id) DO NOTHING
         """), {
             "unit_id": unit_id,
             "offer_id": offer_id,

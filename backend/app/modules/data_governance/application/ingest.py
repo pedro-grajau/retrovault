@@ -11,6 +11,7 @@ from app.modules.data_governance.domain.models import (
     PackageSnapshot,
     Right,
     SourceMetric,
+    contains_invalid_postgres_text,
     strict_json_loads,
 )
 from app.modules.data_governance.ports.repository import IngestionRepository
@@ -48,6 +49,8 @@ def parse_record(
 ) -> CatalogRecord:
     try:
         data = strict_json_loads(raw)
+        if contains_invalid_postgres_text(data):
+            raise ValueError()
         if not isinstance(data, dict) or data.get("id") != record_id:
             raise ValueError()
         attributes = data.get("attributes", {})
@@ -121,7 +124,7 @@ def parse_record(
             )
         metrics = tuple(sorted(metrics_list, key=lambda metric: metric.name))
         return CatalogRecord(record_id, raw, tuple(sorted(attributes)), media, metrics)
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, RecursionError) as exc:
         raise InvalidRecord("invalid_record") from exc
 
 
