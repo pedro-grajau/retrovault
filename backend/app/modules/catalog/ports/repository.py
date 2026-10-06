@@ -1,9 +1,18 @@
 """Public ports for Catalog's published projection."""
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.catalog.domain.publication import PublishedGame
+
+
+@dataclass(frozen=True)
+class PublishedSearchHit:
+    """A published game and the search keyset position immediately after it."""
+
+    game: PublishedGame
+    cursor_after: str
 
 
 class PublishedCatalog(Protocol):
@@ -17,6 +26,17 @@ class PublishedCatalog(Protocol):
         platform: str | None = None,
         genre: str | None = None,
     ) -> tuple[list[PublishedGame], str | None]: ...
+
+    def search_games(
+        self,
+        *,
+        query: str,
+        limit: int,
+        cursor: str | None = None,
+        platform: str | None = None,
+        genre: str | None = None,
+        cursor_context: str | None = None,
+    ) -> tuple[list[PublishedSearchHit], str | None]: ...
 
     def encode_cursor(self, game: PublishedGame) -> str: ...
 

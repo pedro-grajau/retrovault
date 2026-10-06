@@ -288,6 +288,10 @@ export type listGamesApiV1CatalogGamesGetData = {
          */
         cursor?: string | null;
         /**
+         * Q
+         */
+        q?: string | null;
+        /**
          * Platform
          */
         platform?: string | null;
