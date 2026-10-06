@@ -1,0 +1,138 @@
+{
+  "dataset": {
+    "active_published_games": 3217,
+    "fingerprint_sha256": "229b043dee0d3236a1f41b1512ab4dd1a3a1b9bada99cd4fba741c6ba39eba64",
+    "games_by_platform": {
+      "Mega Drive": 613,
+      "Nintendo 64": 513,
+      "PlayStation": 907,
+      "SNES": 1184
+    },
+    "source_manifest_versions": [
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-attempt-retry1-n1000-b0001",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n1000-b0001",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n100-b0001",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n100-b0002",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n100-b0003",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n100-b0004",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n100-b0005",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n100-b0006",
+      "console-1-0e64ff78eadee1022061bd7a0e17f013-n100-b0007",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0001",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0002",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0003",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0004",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0005",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0006",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0007",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0008",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0009",
+      "console-12-319a5d259e4afab7ebf4efaa240a061e-n100-b0010",
+      "console-2-ff19a58eb502366ccd28361aece02e0e-n100-b0001",
+      "console-2-ff19a58eb502366ccd28361aece02e0e-n100-b0002",
+      "console-2-ff19a58eb502366ccd28361aece02e0e-n100-b0003",
+      "console-2-ff19a58eb502366ccd28361aece02e0e-n100-b0004",
+      "console-2-ff19a58eb502366ccd28361aece02e0e-n100-b0005",
+      "console-2-ff19a58eb502366ccd28361aece02e0e-n100-b0006",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0001",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0002",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0003",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0004",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0005",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0006",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0007",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0008",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0009",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0010",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0011",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0012",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0013",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0014",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0015",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0016",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0017",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0018",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0019",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0020",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0021",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0022",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0023",
+      "console-3-4a73627072d80dae8956da1c1767e7ac-attempt-game-id-fix-20261001-n50-b0024",
+      "ra-db-check-a7026c6e3e334dc7aab0777c0a5d3fc9"
+    ]
+  },
+  "game_offers": {
+    "by_mode": {
+      "purchase": {
+        "distinct_games": 34,
+        "offers": 34
+      },
+      "rental": {
+        "distinct_games": 26,
+        "offers": 26
+      }
+    },
+    "count": 60,
+    "target_maximum": 100,
+    "target_minimum": 60,
+    "within_target_range": true
+  },
+  "generated_at": "2026-10-06T20:28:40.389159+00:00",
+  "limitations": [
+    "O fingerprint identifica o conjunto publicado ativo, não prova que a carga está completa em relação à API de origem.",
+    "Duplicatas publicadas são uma verificação exata de título, plataforma, região e edição normalizados; o sinal de staging é reportado separadamente.",
+    "Ofertas contabilizadas são linhas Commerce ligadas a jogos; nenhuma oferta de console é contada."
+  ],
+  "quality": {
+    "critical_completeness_percent": 100.0,
+    "critical_fields_complete": 3217,
+    "critical_fields_total": 3217,
+    "lineage_completeness_percent": 100.0,
+    "optional_field_completeness_percent": 52.49,
+    "optional_fields": {
+      "description": {
+        "completeness_percent": 0.0,
+        "present": 0,
+        "total": 3217
+      },
+      "developer": {
+        "completeness_percent": 94.44,
+        "present": 3038,
+        "total": 3217
+      },
+      "genre": {
+        "completeness_percent": 83.68,
+        "present": 2692,
+        "total": 3217
+      },
+      "included_items": {
+        "completeness_percent": 0.0,
+        "present": 0,
+        "total": 3217
+      },
+      "publisher": {
+        "completeness_percent": 90.36,
+        "present": 2907,
+        "total": 3217
+      },
+      "rating": {
+        "completeness_percent": 0.0,
+        "present": 0,
+        "total": 3217
+      },
+      "year": {
+        "completeness_percent": 98.97,
+        "present": 3184,
+        "total": 3217
+      }
+    },
+    "published_attribute_count": 24623,
+    "published_attributes_with_identified_lineage": 24623,
+    "published_exact_identity_duplicate_excess": 0,
+    "published_exact_identity_duplicate_groups": 0,
+    "staging_match_pairs_by_kind": {}
+  },
+  "report_version": 1,
+  "scope": "Agregados do catálogo ativo e ofertas de jogos no PostgreSQL local.",
+  "status": "complete"
+}

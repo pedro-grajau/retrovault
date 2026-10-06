@@ -50,6 +50,11 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
         database_url.render_as_string(hide_password=False),
     )
     game_id, offer_id = uuid4(), uuid4()
+    media_hash = "a" * 64
+    published_game_ids = [
+        uuid5(NAMESPACE_URL, f"retrovault:closeout:published-game:{index}")
+        for index in range(70)
+    ]
     unit_id = uuid5(
         NAMESPACE_URL,
         f"retrovault:sandbox:unit:{game_id}:purchase:0",
@@ -77,6 +82,34 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
 
         command.upgrade(config, "head")
         with test_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    INSERT INTO catalog.published_media
+                    (content_hash, content, content_type, attribution,
+                     rights_reference, created_at)
+                    VALUES (:hash, :content, 'image/png', 'fixture', 'fixture', now())
+                """),
+                {"hash": media_hash, "content": b"fixture"},
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO catalog.published_games
+                    (id, source, source_record_id, title, platform, editorial,
+                     version, etag, active, cover_hash, updated_at)
+                    VALUES (:id, 'fixture', :record_id, :title, 'SNES', '{}'::jsonb,
+                            1, :etag, true, :cover_hash, now())
+                """),
+                [
+                    {
+                        "id": published_game_id,
+                        "record_id": str(index),
+                        "title": f"Jogo de fixture {index}",
+                        "etag": f'"fixture-{index}"',
+                        "cover_hash": media_hash,
+                    }
+                    for index, published_game_id in enumerate(published_game_ids)
+                ],
+            )
             migrated = connection.execute(
                 text("""
                     SELECT o.sku_code, o.mode, o.price_minor, o.currency,
@@ -111,6 +144,9 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
         seed_main = runpy.run_path(str(backend_root / "scripts/seed-sandbox-commerce.py"))["main"]
         seed_main()
         with test_engine.connect() as connection:
+            offer_count = connection.execute(
+                text("SELECT count(*) FROM commerce.offers WHERE game_id IS NOT NULL")
+            ).scalar_one()
             facts = connection.execute(
                 text("""
                     SELECT o.mode, o.price_minor, o.currency, o.demo_rank, o.sandbox,
@@ -120,6 +156,7 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
                 """),
                 {"id": unit_id},
             ).one()
+        assert 60 <= offer_count <= 100
         assert facts.state == "unavailable"
         assert facts.condition_summary == "Fato editado"
         assert facts.defects == ["Defeito editado"]
@@ -129,6 +166,40 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
         assert facts.currency == "BRL"
         assert facts.demo_rank == 1
         assert facts.sandbox is True
+
+        seed_main()
+        with test_engine.connect() as connection:
+            repeated_count = connection.execute(
+                text("SELECT count(*) FROM commerce.offers WHERE game_id IS NOT NULL")
+            ).scalar_one()
+        assert repeated_count == offer_count
+
+        with test_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    INSERT INTO commerce.offers
+                    (id, game_id, mode, price_minor, currency, condition_summary,
+                     demo_rank, sandbox, sku_code, created_at)
+                    VALUES (:id, :game_id, 'purchase', 4990, 'BRL', 'Oferta existente',
+                            :rank, true, :sku_code, now())
+                """),
+                [
+                    {
+                        "id": uuid5(NAMESPACE_URL, f"retrovault:closeout:extra-offer:{index}"),
+                        "game_id": uuid5(NAMESPACE_URL, f"retrovault:closeout:extra-game:{index}"),
+                        "rank": 1000 + index,
+                        "sku_code": f"RV-CLOSEOUT-EXTRA-{index}",
+                    }
+                    for index in range(41)
+                ],
+            )
+
+        seed_main()
+        with test_engine.connect() as connection:
+            over_limit_count = connection.execute(
+                text("SELECT count(*) FROM commerce.offers WHERE game_id IS NOT NULL")
+            ).scalar_one()
+        assert over_limit_count == 101
 
         for table in (
             "private_media",

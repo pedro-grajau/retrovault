@@ -84,6 +84,11 @@ class RetroAchievementsSource:
             else None
         )
         self.refresh_cache = refresh_cache
+        if expected_console_id is not None and (
+            type(expected_console_id) is not int
+            or expected_console_id not in ALLOWED_CONSOLES
+        ):
+            raise PackageError("console_not_allowed")
         self.expected_console_id = expected_console_id
         self._client = client
         self._owns_client = client is None
@@ -323,14 +328,10 @@ class RetroAchievementsSource:
         raise PackageError("source_redirect_rejected")
 
     def discover_console_games(
-        self, console_id: int = 3, *, page_size: int = 100
+        self, console_id: int, *, page_size: int = 100
     ) -> dict[str, object]:
         """Descobre um sistema ativo e lista jogos com conquistas em páginas limitadas."""
-        if (
-            type(console_id) is not int
-            or console_id != 3
-            or console_id not in ALLOWED_CONSOLES
-        ):
+        if type(console_id) is not int or console_id not in ALLOWED_CONSOLES:
             raise PackageError("console_not_allowed")
         if type(page_size) is not int or not 1 <= page_size <= MAX_GAME_LIST_PAGE_SIZE:
             raise PackageError("invalid_page_size")

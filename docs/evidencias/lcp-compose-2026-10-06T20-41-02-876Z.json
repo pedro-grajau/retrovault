@@ -1,0 +1,429 @@
+{
+  "report_version": 1,
+  "measured_at": "2026-10-06T20:41:02.876Z",
+  "status": "complete_local_baseline",
+  "scope": "Compose local production-build baseline; not production performance evidence.",
+  "environment": {
+    "compose_service": "frontend-lcp",
+    "frontend_url": "http://127.0.0.1:4173",
+    "api_url": "http://127.0.0.1:8000",
+    "app_version": "dev",
+    "git_commit": "f876927fce71947c39f72c6876eafca81d2b64f0",
+    "git_worktree_clean": false,
+    "browser": "Chromium 151.0.7922.34",
+    "viewport_css_px": {
+      "width": 1365,
+      "height": 900
+    },
+    "device_scale_factor": 1,
+    "reduced_motion": "reduce",
+    "warmup_navigations_per_route": 1,
+    "measured_navigations_per_route": 30,
+    "dataset_label": "Catálogo publicado ativo no PostgreSQL Compose local",
+    "detail_game_id": "004bdbac-857f-5b76-84d1-f09a67aebf96"
+  },
+  "routes": [
+    {
+      "route": "/",
+      "warmup_navigations": 1,
+      "sample_count": 30,
+      "successful_samples": 30,
+      "missing_samples": 0,
+      "p75_ms": 68,
+      "local_threshold_ms": 2500,
+      "status": "within_local_threshold",
+      "samples": [
+        {
+          "navigation": 1,
+          "lcp_ms": 60
+        },
+        {
+          "navigation": 2,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 3,
+          "lcp_ms": 60
+        },
+        {
+          "navigation": 4,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 5,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 6,
+          "lcp_ms": 60
+        },
+        {
+          "navigation": 7,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 8,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 9,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 10,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 11,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 12,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 13,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 14,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 15,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 16,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 17,
+          "lcp_ms": 92
+        },
+        {
+          "navigation": 18,
+          "lcp_ms": 52
+        },
+        {
+          "navigation": 19,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 20,
+          "lcp_ms": 60
+        },
+        {
+          "navigation": 21,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 22,
+          "lcp_ms": 76
+        },
+        {
+          "navigation": 23,
+          "lcp_ms": 52
+        },
+        {
+          "navigation": 24,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 25,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 26,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 27,
+          "lcp_ms": 60
+        },
+        {
+          "navigation": 28,
+          "lcp_ms": 60
+        },
+        {
+          "navigation": 29,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 30,
+          "lcp_ms": 64
+        }
+      ]
+    },
+    {
+      "route": "/catalog",
+      "warmup_navigations": 1,
+      "sample_count": 30,
+      "successful_samples": 30,
+      "missing_samples": 0,
+      "p75_ms": 80,
+      "local_threshold_ms": 2500,
+      "status": "within_local_threshold",
+      "samples": [
+        {
+          "navigation": 1,
+          "lcp_ms": 76
+        },
+        {
+          "navigation": 2,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 3,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 4,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 5,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 6,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 7,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 8,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 9,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 10,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 11,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 12,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 13,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 14,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 15,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 16,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 17,
+          "lcp_ms": 116
+        },
+        {
+          "navigation": 18,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 19,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 20,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 21,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 22,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 23,
+          "lcp_ms": 64
+        },
+        {
+          "navigation": 24,
+          "lcp_ms": 76
+        },
+        {
+          "navigation": 25,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 26,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 27,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 28,
+          "lcp_ms": 52
+        },
+        {
+          "navigation": 29,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 30,
+          "lcp_ms": 76
+        }
+      ]
+    },
+    {
+      "route": "/games/004bdbac-857f-5b76-84d1-f09a67aebf96",
+      "warmup_navigations": 1,
+      "sample_count": 30,
+      "successful_samples": 30,
+      "missing_samples": 0,
+      "p75_ms": 76,
+      "local_threshold_ms": 2500,
+      "status": "within_local_threshold",
+      "samples": [
+        {
+          "navigation": 1,
+          "lcp_ms": 76
+        },
+        {
+          "navigation": 2,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 3,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 4,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 5,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 6,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 7,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 8,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 9,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 10,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 11,
+          "lcp_ms": 80
+        },
+        {
+          "navigation": 12,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 13,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 14,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 15,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 16,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 17,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 18,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 19,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 20,
+          "lcp_ms": 76
+        },
+        {
+          "navigation": 21,
+          "lcp_ms": 84
+        },
+        {
+          "navigation": 22,
+          "lcp_ms": 88
+        },
+        {
+          "navigation": 23,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 24,
+          "lcp_ms": 68
+        },
+        {
+          "navigation": 25,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 26,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 27,
+          "lcp_ms": 76
+        },
+        {
+          "navigation": 28,
+          "lcp_ms": 72
+        },
+        {
+          "navigation": 29,
+          "lcp_ms": 56
+        },
+        {
+          "navigation": 30,
+          "lcp_ms": 68
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "A medição usa um Compose local e não comprova desempenho de produção.",
+    "Cada rota precisa de 30 eventos LCP; evento ausente ou falha de navegação torna sua conclusão inconclusiva.",
+    "A página de detalhe é medida somente quando existe um jogo publicado ou LCP_GAME_ID é informado.",
+    "O baseline não representa rede, CPU ou variabilidade de usuários reais."
+  ]
+}

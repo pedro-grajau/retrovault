@@ -51,7 +51,13 @@ class Problem(BaseModel):
 
 
 app = FastAPI(title="RetroVault API", version="1.0.0", openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Correlation-ID", "If-None-Match"], expose_headers=["X-Correlation-ID", "ETag"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:4173"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Correlation-ID", "If-None-Match"],
+    expose_headers=["X-Correlation-ID", "ETag"],
+)
 app.include_router(catalog_router)
 app.include_router(concierge_router)
 

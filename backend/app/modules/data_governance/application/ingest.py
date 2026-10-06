@@ -1,6 +1,7 @@
 """Caso de uso: recebimento e preservação de evidência sem normalização."""
 
 import hashlib
+import re
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -292,8 +293,19 @@ def _ingest_snapshot(
                 source_responses=source_responses,
             )
             preserved += 1
-        except (PackageError, InvalidRecord):
-            repository.fail(run_id, reference.record_id, "record_rejected", uuid4())
+        except (PackageError, InvalidRecord) as exc:
+            failure_cause = exc.args[0] if exc.args else None
+            if not isinstance(failure_cause, str) or not re.fullmatch(
+                r"[a-z0-9_]{1,80}", failure_cause
+            ):
+                failure_cause = "record_rejected"
+            repository.fail(
+                run_id,
+                reference.record_id,
+                "record_rejected",
+                uuid4(),
+                cause=failure_cause,
+            )
             rejected += 1
         except Exception:
             repository.fail(run_id, reference.record_id, "storage_error", uuid4())

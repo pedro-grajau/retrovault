@@ -76,7 +76,7 @@ class RecordingRepository:
             "source_metrics": record.source_metrics,
         }
 
-    def fail(self, run_id, record_id, code, correlation_id):
+    def fail(self, run_id, record_id, code, correlation_id, *, cause=None):
         raise AssertionError(f"fixture should not fail: {code}")
 
     def finish(self, run_id, received, preserved, rejected):
@@ -87,8 +87,8 @@ class RecordingRepository:
 
 
 class RejectionRecordingRepository(RecordingRepository):
-    def fail(self, run_id, record_id, code, correlation_id):
-        self.failure = (run_id, record_id, code, correlation_id)
+    def fail(self, run_id, record_id, code, correlation_id, *, cause=None):
+        self.failure = (run_id, record_id, code, correlation_id, cause)
 
 
 def test_deeply_nested_local_record_is_rejected_without_aborting_other_records(
@@ -112,6 +112,7 @@ def test_deeply_nested_local_record_is_rejected_without_aborting_other_records(
     ingest(LocalPackage(package), repository, "test-version")
 
     assert repository.failure[1:3] == ("deep", "record_rejected")
+    assert repository.failure[4] == "invalid_record"
     assert repository.preserved["raw_payload"] == valid_payload
     assert repository.finished == (2, 1, 1)
 

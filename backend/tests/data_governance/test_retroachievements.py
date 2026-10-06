@@ -9,6 +9,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from PIL import Image
 
 from app.modules.data_governance.adapters.retroachievements import (
+    ALLOWED_CONSOLES,
     RetroAchievementsSource,
 )
 
@@ -491,6 +492,77 @@ def test_discovery_rejects_non_integer_console_id_without_requests(
     assert requests == []
 
 
+@pytest.mark.parametrize(("console_id", "console_name"), sorted(ALLOWED_CONSOLES.items()))
+def test_discovery_supports_every_allowed_console_without_external_calls(
+    tmp_path: Path, console_id: int, console_name: str
+) -> None:
+    requested_console_ids: list[str] = []
+    game_id = 10_000 + console_id
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("API_GetConsoleIDs.php"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "ID": allowed_id,
+                        "Name": allowed_name,
+                        "Active": True,
+                        "IsGameSystem": True,
+                    }
+                    for allowed_id, allowed_name in ALLOWED_CONSOLES.items()
+                ],
+            )
+        requested_console_ids.append(request.url.params["i"])
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "ID": game_id,
+                    "Title": f"Jogo {console_name}",
+                    "ConsoleID": console_id,
+                    "NumAchievements": 1,
+                }
+            ],
+        )
+
+    source = RetroAchievementsSource(
+        None,
+        "fixture-secret",
+        cache_dir=tmp_path / "cache",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    catalog = source.discover_console_games(console_id, page_size=10)
+
+    assert catalog["console_id"] == console_id
+    assert catalog["console_name"] == console_name
+    assert [game["ConsoleID"] for game in catalog["games"]] == [console_id]
+    assert requested_console_ids == [str(console_id)]
+
+
+@pytest.mark.parametrize("console_id", [None, 0, 999, 3.0, True])
+def test_discovery_rejects_missing_or_unlisted_console_before_requests(
+    tmp_path: Path, console_id: object
+) -> None:
+    requests: list[httpx.Request] = []
+    source = RetroAchievementsSource(
+        None,
+        "fixture-secret",
+        cache_dir=tmp_path / "cache",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: (requests.append(request), httpx.Response(200, json=[]))[1]
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="console_not_allowed"):
+        source.discover_console_games(console_id)  # type: ignore[arg-type]
+
+    assert requests == []
+
+
 def test_response_cache_is_read_with_a_size_bound(tmp_path: Path) -> None:
     source = RetroAchievementsSource(
         None, "fixture-secret", cache_dir=tmp_path / "cache"
@@ -914,7 +986,7 @@ def test_console_discovery_fails_before_listing_if_snes_is_not_active(
     from app.modules.data_governance.ports.source import PackageError
 
     try:
-        source.discover_console_games()
+        source.discover_console_games(3)
     except PackageError as error:
         assert str(error) == "console_not_available"
     else:
