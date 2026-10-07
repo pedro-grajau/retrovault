@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-import hashlib
 from _thread import LockType
 from threading import Lock
-from typing import Any, Generator, Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from app.modules.concierge.domain.session import (
@@ -36,7 +37,7 @@ class InMemorySessionStore:
     @contextmanager
     def session_processing_lock(
         self, session_id: UUID
-    ) -> Generator[None, None, None]:
+    ) -> Generator[None]:
         with self._session_lock_guard:
             lock, users = self._session_processing_locks.get(
                 session_id, (Lock(), 0)

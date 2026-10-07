@@ -7,7 +7,11 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.concierge.domain.session import IncomingMessage, MessageClaim, OutboxReply
+from app.modules.concierge.domain.session import (
+    IncomingMessage,
+    MessageClaim,
+    OutboxReply,
+)
 
 
 class SessionStore(Protocol):

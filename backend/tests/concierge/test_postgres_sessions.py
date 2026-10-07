@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from uuid import uuid4

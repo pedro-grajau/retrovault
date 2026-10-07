@@ -151,7 +151,7 @@ async def test_context_reference_requires_a_fully_configured_telegram_channel(
 
 
 @pytest.mark.anyio
-async def test_global_entry_can_be_created_without_context_signing_secret(monkeypatch) -> None:
+async def test_global_entry_can_be_created_without_context_signing_secret() -> None:
     game_id = uuid4()
     concierge_router.configure_services(
         Catalog(game_id),

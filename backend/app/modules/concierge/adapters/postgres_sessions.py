@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-import hashlib
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -17,7 +17,11 @@ from sqlalchemy import Connection, Engine, make_url, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.modules.concierge.domain.session import IncomingMessage, MessageClaim, OutboxReply
+from app.modules.concierge.domain.session import (
+    IncomingMessage,
+    MessageClaim,
+    OutboxReply,
+)
 
 WORKFLOW_VERSION = "2.1.v1"
 
@@ -68,7 +72,7 @@ class PostgresSessionRepository:
     @contextmanager
     def session_processing_lock(
         self, session_id: UUID
-    ) -> Generator[None, None, None]:
+    ) -> Generator[None]:
         # A session-level PostgreSQL advisory lock spans graph checkpoint writes
         # and message completion, including across multiple app processes.
         lock_key = int.from_bytes(

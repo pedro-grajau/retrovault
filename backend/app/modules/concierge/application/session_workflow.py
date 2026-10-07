@@ -19,7 +19,11 @@ from app.modules.concierge.application.context_reference import (
     ContextReferencesUnavailable,
     InvalidContextReference,
 )
-from app.modules.concierge.domain.session import IncomingMessage, OutboxReply, ProcessingResult
+from app.modules.concierge.domain.session import (
+    IncomingMessage,
+    OutboxReply,
+    ProcessingResult,
+)
 from app.modules.concierge.ports.sessions import SessionStore
 
 WORKFLOW_VERSION = "2.1.v1"
