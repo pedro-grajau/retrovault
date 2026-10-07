@@ -11,7 +11,10 @@ import httpx
 
 from app.modules.concierge.domain.session import IncomingMessage
 
-_START_COMMAND = re.compile(r"^/start(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$", re.IGNORECASE)
+_START_COMMAND = re.compile(
+    r"^/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$",
+    re.IGNORECASE,
+)
 _POSTGRES_BIGINT_MAX = 2**63 - 1
 
 

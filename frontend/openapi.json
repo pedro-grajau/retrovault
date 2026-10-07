@@ -1131,6 +1131,9 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Content-Length inv\u00e1lido."
+          },
           "401": {
             "description": "Segredo de webhook inv\u00e1lido."
           },

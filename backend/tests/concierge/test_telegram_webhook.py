@@ -262,7 +262,10 @@ async def test_replayed_update_does_not_create_duplicate_reply(webhook) -> None:
 
 
 @pytest.mark.anyio
-async def test_context_reference_is_consumed_by_first_valid_start(webhook) -> None:
+@pytest.mark.parametrize("start_command", ["/start", "/start@PixelTestBot"])
+async def test_context_reference_is_consumed_by_first_valid_start(
+    webhook, start_command: str
+) -> None:
     app, store, messenger, game_id = webhook
     reference, _ = ContextReferenceService(
         Catalog(game_id), "test-secret", 1800
@@ -270,7 +273,11 @@ async def test_context_reference_is_consumed_by_first_valid_start(webhook) -> No
 
     first = await post_update(
         app,
-        telegram_update(update_id=24, message_id=1, text=f"/start {reference}"),
+        telegram_update(
+            update_id=24,
+            message_id=1,
+            text=f"{start_command} {reference}",
+        ),
     )
     store._sessions[("telegram", "12345")]["status"] = "terminal"
     replay = await post_update(
@@ -282,6 +289,22 @@ async def test_context_reference_is_consumed_by_first_valid_start(webhook) -> No
     assert store._sessions[("telegram", "12345")]["context_game_id"] is None
     assert "link do jogo não pôde ser validado" in messenger.messages[1][1]
     assert len(store._context_reference_uses) == 1
+
+
+@pytest.mark.anyio
+async def test_webhook_ignores_json_integer_exceeding_python_digit_limit(webhook) -> None:
+    app, store, messenger, _ = webhook
+
+    response = await post_update(
+        app,
+        {},
+        raw=b'{"update_id":' + (b"9" * 5000) + b"}",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    assert store._sessions == {}
+    assert messenger.messages == []
 
 
 @pytest.mark.anyio

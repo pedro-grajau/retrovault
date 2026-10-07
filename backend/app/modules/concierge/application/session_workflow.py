@@ -23,7 +23,10 @@ from app.modules.concierge.domain.session import IncomingMessage, OutboxReply, P
 from app.modules.concierge.ports.sessions import SessionStore
 
 WORKFLOW_VERSION = "2.1.v1"
-_START_COMMAND = re.compile(r"^/start(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$", re.IGNORECASE)
+_START_COMMAND = re.compile(
+    r"^/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$",
+    re.IGNORECASE,
+)
 _START_PREFIX = re.compile(
     r"^/start(?:@[A-Za-z0-9_]+)?(?=$|\s)(?P<suffix>[\s\S]*)$", re.IGNORECASE
 )

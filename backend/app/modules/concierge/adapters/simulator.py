@@ -400,6 +400,16 @@ class SessionSimulator:
     def send(
         self, user_id: str, text: str, *, game_reference: str | None = None
     ) -> ProcessingResult:
+        if (
+            not isinstance(text, str)
+            or not text
+            or len(text) > 4096
+            or any(
+                ord(character) < 32 and character not in "\t\r\n"
+                for character in text
+            )
+        ):
+            raise ValueError("invalid_message_text")
         self._counter += 1
         now = datetime.now(UTC)
         message = IncomingMessage(

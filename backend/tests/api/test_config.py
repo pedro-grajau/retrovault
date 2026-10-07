@@ -43,3 +43,9 @@ def test_retroachievements_api_key_is_masked_in_settings_repr() -> None:
     assert configured.retroachievements_api_key.get_secret_value() == sentinel
     assert sentinel not in repr(configured)
     assert "**********" in repr(configured.retroachievements_api_key)
+
+
+def test_telegram_user_allowlist_parses_comma_separated_ids() -> None:
+    configured = Settings(pixel_telegram_allowed_user_ids="12345,67890")
+
+    assert configured.telegram_user_allowlist == frozenset({12345, 67890})

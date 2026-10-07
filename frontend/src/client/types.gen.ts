@@ -597,6 +597,10 @@ export type telegramWebhookApiV1ConciergeTelegramWebhookPostData = {
 
 export type telegramWebhookApiV1ConciergeTelegramWebhookPostErrors = {
     /**
+     * Content-Length inválido.
+     */
+    400: unknown;
+    /**
      * Segredo de webhook inválido.
      */
     401: unknown;

@@ -80,6 +80,15 @@ def test_session_simulator_uses_same_versioned_workflow_and_persists_context() -
     assert store._messages[("simulator", 1)]["workflow_version"] == "2.1.v1"
 
 
+@pytest.mark.parametrize("text", ["", "x" * 4097, "nul\x00byte", "bell\x07"])
+def test_session_simulator_rejects_text_telegram_would_ignore(text: str) -> None:
+    _, _, _, workflow = setup_workflow()
+    simulator = SessionSimulator(workflow)
+
+    with pytest.raises(ValueError, match="invalid_message_text"):
+        simulator.send("simulated-user", text)
+
+
 def test_checkpoint_resumes_session_without_repeating_initial_greeting() -> None:
     store, saver, references, workflow = setup_workflow()
     instant = datetime.now(UTC).replace(microsecond=0)

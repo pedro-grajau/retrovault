@@ -1,4 +1,4 @@
-1a1447c72c4d3af891dcd11b7325bb5732c94dff74749efd8bc1f0e10f083a81  frontend/openapi.json
+e09f06e762eaed5419221c2230c6b728e3236e9882fe1c5a72e01c9fb821014d  frontend/openapi.json
 37a505d099fb4fdd169076aef36c1d48724e2fc658cbaaf32fec7dfe14c560b7  frontend/src/client/client/client.gen.ts
 10d237adce74cfc87181687c67a53098e6879c88958eed03df729267bd999f5a  frontend/src/client/client/index.ts
 6d6757537f8b70a30586c635e0f534d45c2894b31a9b8049fc19bd0b80853eb6  frontend/src/client/client/types.gen.ts
@@ -14,4 +14,4 @@ df993567abbe3e5b477d81517fb967cf63cf40b7866957d5dc6cc03238cb1426  frontend/src/c
 55d7b2b7271f508556793d7e03aa62562af8c3ac14d197346a2154d9025b98b3  frontend/src/client/core/utils.gen.ts
 f1bd24d6d13df7afacd6cf98d590777b5ae4920f161ae9c73881443b94b8ad76  frontend/src/client/index.ts
 511be95ffc7f2c55732639c8802edde4413a0423d6aa23828384bed44e771dad  frontend/src/client/sdk.gen.ts
-13179ebf84a23d59e58a48cce95af74c46b211d0d09b23d2a33ab052b4ecff8e  frontend/src/client/types.gen.ts
+eb5551775a05418174cca7fb99c99beac0226a3f93feb2e035d662d763991d75  frontend/src/client/types.gen.ts

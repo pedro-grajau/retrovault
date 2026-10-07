@@ -194,6 +194,7 @@ class PostgresSessionRepository:
                             session_id=session_row["id"],
                             status="reconciliation",
                             lease_until=None,
+                            lease_token=None,
                         )
                         return MessageClaim("reconciliation", session_row["id"])
                     if not session_row["created"]:

@@ -170,6 +170,50 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
         # A reclaimed message lease fences the old worker; the current worker
         # can complete and its Telegram outbox entry is claimable from PostgreSQL.
         now = datetime.now(UTC)
+        context_reference_hash = "b" * 64
+        contextual_message = IncomingMessage(
+            channel="telegram",
+            external_user_id=f"context-user-{uuid4().hex}",
+            external_chat_id=f"context-chat-{uuid4().hex}",
+            update_id=7102,
+            message_id=1,
+            text="/start [context reference redacted]",
+            sent_at=now,
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        contextual_claim = repository.claim_message(
+            contextual_message,
+            safe_text=contextual_message.text,
+            context_game_id=game_id,
+            context_reference_hash=context_reference_hash,
+            now=now,
+            max_age_seconds=900,
+        )
+        replayed_context_message = IncomingMessage(
+            channel="telegram",
+            external_user_id=f"context-replay-user-{uuid4().hex}",
+            external_chat_id=f"context-replay-chat-{uuid4().hex}",
+            update_id=7103,
+            message_id=1,
+            text="/start [context reference redacted]",
+            sent_at=now,
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        replayed_context_claim = repository.claim_message(
+            replayed_context_message,
+            safe_text=replayed_context_message.text,
+            context_game_id=game_id,
+            context_reference_hash=context_reference_hash,
+            now=now,
+            max_age_seconds=900,
+        )
+        assert contextual_claim.context_game_id == game_id
+        assert contextual_claim.context_reference_replayed is False
+        assert replayed_context_claim.context_game_id is None
+        assert replayed_context_claim.context_reference_replayed is True
+
         telegram_message = IncomingMessage(
             channel="telegram",
             external_user_id=f"repo-user-{uuid4().hex}",
@@ -243,6 +287,26 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
             reply_text="Resposta atual",
             workflow_version="2.1.v1",
         )
+        out_of_order_message = IncomingMessage(
+            channel="telegram",
+            external_user_id=telegram_message.external_user_id,
+            external_chat_id=telegram_message.external_chat_id,
+            update_id=7104,
+            message_id=telegram_message.message_id - 1,
+            text="Mensagem atrasada",
+            sent_at=now - timedelta(seconds=1),
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        out_of_order_claim = repository.claim_message(
+            out_of_order_message,
+            safe_text=out_of_order_message.text,
+            context_game_id=None,
+            now=now,
+            max_age_seconds=900,
+        )
+        assert out_of_order_claim.status == "reconciliation"
+        assert out_of_order_claim.session_id == reclaimed_claim.session_id
 
         simulator_message = IncomingMessage(
             channel="simulator",

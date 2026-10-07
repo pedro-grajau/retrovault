@@ -302,6 +302,7 @@ async def _handle_and_deliver(message: Any) -> str:
     "/telegram/webhook",
     status_code=200,
     responses={
+        400: {"description": "Content-Length inválido."},
         401: {"description": "Segredo de webhook inválido."},
         413: {"description": "Atualização excede o tamanho permitido."},
         503: {"description": "Telegram ou persistência indisponível."},
@@ -323,7 +324,7 @@ async def telegram_webhook(request: Request) -> dict[str, str | bool]:
     raw_body = await _read_bounded_body(request)
     try:
         payload = json.loads(raw_body)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+    except (ValueError, RecursionError):
         return {"ok": True, "status": "ignored"}
     try:
         message = _telegram_updates.normalize(
