@@ -176,8 +176,11 @@ class IntentExtractionService:
         )
 
     def _release(self, reservation_id: UUID, now: datetime) -> None:
+        ledger = self.ledger
+        if ledger is None:
+            return
         try:
-            self.ledger.release(reservation_id, now=now)  # type: ignore[union-attr]
+            ledger.release(reservation_id, now=now)
         except AiLedgerUnavailable:
             return
 
