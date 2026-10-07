@@ -23,7 +23,7 @@ from app.modules.concierge.domain.session import (
     OutboxReply,
 )
 
-WORKFLOW_VERSION = "2.1.v1"
+WORKFLOW_VERSION = "2.2.v1"
 
 
 class SessionsUnavailable(RuntimeError):

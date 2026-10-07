@@ -1,1 +1,13 @@
-{"owner":"concierge","version":1,"status":"reserved","contracts":[],"note":"Reserved for the story that defines handoff behavior."}
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "channel": "sandbox",
+  "request_idempotency": "channel+external_update_id",
+  "notification_delivery": "leased-postgresql-outbox",
+  "recipient_policy": "exactly-one-allowlisted-user-id",
+  "empty_or_multiple_recipients": "disabled-without-selection",
+  "forwards_conversation_history": false,
+  "claims_session_assumption": false,
+  "contracts": ["request.v1.json"]
+}

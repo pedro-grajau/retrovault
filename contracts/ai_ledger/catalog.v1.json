@@ -1,1 +1,17 @@
-{"owner":"concierge","version":1,"status":"reserved","contracts":[],"note":"Reserved for the story that defines AI ledger behavior."}
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "monthly_limit_usd": 25,
+  "billing_timezone": "America/Fortaleza",
+  "period_boundary": "local-calendar-month",
+  "timestamps": "UTC",
+  "reservation": "atomic-before-provider-call",
+  "idempotency": "channel+external_update_id",
+  "concurrency_authority": "PostgreSQL-row-lock-on-month",
+  "reconciliation": "actual-token-usage-and-configured-snapshot-rates",
+  "ambiguous_expiry": "post-full-reservation-conservatively",
+  "metadata_retention_days": 180,
+  "raw_prompt_or_message_retained": false,
+  "contracts": ["reservation.v1.json"]
+}

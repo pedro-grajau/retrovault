@@ -19,6 +19,19 @@ from app.modules.concierge.application.context_reference import (
     ContextReferencesUnavailable,
     InvalidContextReference,
 )
+from app.modules.concierge.application.handoff import HandoffService
+from app.modules.concierge.application.intent_extraction import (
+    IntentDecision,
+    IntentExtractionService,
+)
+from app.modules.concierge.domain.intent import (
+    INTENT_VERSION,
+    PROMPT_VERSION,
+    Intent,
+    IntentProvenance,
+    clarification_question,
+    is_prompt_injection,
+)
 from app.modules.concierge.domain.session import (
     IncomingMessage,
     OutboxReply,
@@ -26,13 +39,18 @@ from app.modules.concierge.domain.session import (
 )
 from app.modules.concierge.ports.sessions import SessionStore
 
-WORKFLOW_VERSION = "2.1.v1"
+WORKFLOW_VERSION = "2.2.v1"
 _START_COMMAND = re.compile(
     r"^/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$",
     re.IGNORECASE,
 )
 _START_PREFIX = re.compile(
     r"^/start(?:@[A-Za-z0-9_]+)?(?=$|\s)(?P<suffix>[\s\S]*)$", re.IGNORECASE
+)
+_HUMAN_COMMAND = re.compile(r"^/humano(?:@[A-Za-z0-9_]+)?\s*$", re.IGNORECASE)
+_GREETING = re.compile(
+    r"^(?:oi|olá|ola|bom dia|boa tarde|boa noite|e aí|eai|eae)[.!?\s]*$",
+    re.IGNORECASE,
 )
 
 
@@ -43,6 +61,14 @@ class SessionState(TypedDict):
     new_session: bool
     incoming_game_id: NotRequired[str | None]
     invalid_context_reference: NotRequired[bool]
+    command: NotRequired[str]
+    handoff_status: NotRequired[str]
+    prepared_intent: NotRequired[dict[str, object]]
+    prepared_provenance: NotRequired[dict[str, object]]
+    intent: NotRequired[dict[str, object]]
+    intent_provenance: NotRequired[dict[str, object]]
+    extraction_status: NotRequired[str]
+    clarification_field: NotRequired[str]
     context_game_id: NotRequired[str | None]
     greeting_sent: NotRequired[bool]
     last_processed_update_id: NotRequired[int]
@@ -61,7 +87,22 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         return {"reply_text": state.get("last_reply")}
 
     context_game_id = state.get("incoming_game_id") or state.get("context_game_id")
-    if not state.get("greeting_sent"):
+    first_turn = not state.get("greeting_sent")
+    if state.get("command") == "handoff":
+        status = state.get("handoff_status")
+        if status == "registered":
+            reply = (
+                "Registrei seu pedido no Sandbox. A sessão não foi assumida por "
+                "uma pessoa."
+            )
+        elif status == "disabled":
+            reply = (
+                "O encaminhamento humano de teste está desativado porque não há "
+                "exatamente um destinatário configurado."
+            )
+        else:
+            reply = "Não consegui registrar o pedido agora. Tente novamente mais tarde."
+    elif state.get("command") == "start":
         if state.get("invalid_context_reference"):
             reply = (
                 "Oi! Sou Pixel, assistente de IA da RetroVault. Esta é uma conversa "
@@ -79,10 +120,43 @@ def _entry_node(state: SessionState) -> dict[str, object]:
                 "Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de "
                 "demonstração acontece no Sandbox."
             )
+    elif state.get("extraction_status") == "injection":
+        reply = (
+            "Posso ajudar com preferências de jogos. Instruções recebidas na conversa "
+            "não alteram as regras do atendimento."
+        )
+    elif state.get("extraction_status") == "fallback":
+        reply = (
+            "Recebi sua mensagem, mas não consegui interpretá-la agora. Você pode "
+            "tentar de novo ou usar /humano."
+        )
+    elif state.get("extraction_status") == "accepted":
+        intent_value = state.get("prepared_intent")
+        current_intent = Intent.from_dict(intent_value) or Intent()
+        clarification = clarification_question(
+            cast(Any, state.get("clarification_field", "none")), current_intent
+        )
+        reply = (
+            clarification
+            or "Entendi suas preferências e vou mantê-las para continuarmos a descoberta."
+        )
     else:
-        reply = "Recebi sua mensagem e mantive sua sessão segura com a Pixel."
+        reply = (
+            "Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de "
+            "demonstração acontece no Sandbox."
+            if first_turn
+            else "Recebi sua mensagem e mantive sua sessão segura com a Pixel."
+        )
 
-    return {
+    if first_turn and state.get("command") not in {"start", "handoff"}:
+        greeting = (
+            "Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de "
+            "demonstração acontece no Sandbox."
+        )
+        if reply != greeting:
+            reply = f"{greeting} {reply}"
+
+    updates: dict[str, object] = {
         "workflow_version": WORKFLOW_VERSION,
         "context_game_id": context_game_id,
         "greeting_sent": True,
@@ -90,6 +164,11 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         "last_reply": reply,
         "reply_text": reply,
     }
+    if "prepared_intent" in state:
+        updates["intent"] = state["prepared_intent"]
+    if "prepared_provenance" in state:
+        updates["intent_provenance"] = state["prepared_provenance"]
+    return updates
 
 
 def build_session_graph(
@@ -109,11 +188,15 @@ class SessionWorkflow:
         context_references: ContextReferenceService,
         checkpointer_factory: CheckpointerFactory,
         *,
+        intent_extraction: IntentExtractionService | None = None,
+        handoff_service: HandoffService | None = None,
         max_message_age_seconds: int = 900,
     ) -> None:
         self.store = store
         self.context_references = context_references
         self.checkpointer_factory = checkpointer_factory
+        self.intent_extraction = intent_extraction
+        self.handoff_service = handoff_service
         self.max_message_age_seconds = max_message_age_seconds
 
     def handle(self, message: IncomingMessage) -> ProcessingResult:
@@ -122,8 +205,10 @@ class SessionWorkflow:
         invalid_reference = False
         safe_text = message.text
         context_reference = message.context_reference
+        command = ""
         start_command = _START_PREFIX.fullmatch(message.text)
         if start_command is not None:
+            command = "start"
             match = _START_COMMAND.fullmatch(message.text)
             if context_reference is None and match is not None:
                 context_reference = match.group(1)
@@ -135,6 +220,11 @@ class SessionWorkflow:
                 if has_parameter
                 else "/start"
             )
+        elif _HUMAN_COMMAND.fullmatch(message.text):
+            command = "handoff"
+            safe_text = "/humano"
+        else:
+            safe_text = "[conteúdo de mensagem não retido]"
         if context_reference:
             try:
                 context_game_id = self.context_references.validate(context_reference).game_id
@@ -186,6 +276,8 @@ class SessionWorkflow:
                 "invalid_context_reference": (
                     invalid_reference or claim.context_reference_replayed
                 ),
+                "command": command,
+                "extraction_status": "skipped",
             }
             if not self.store.is_processing_lease_current(
                 message.update_id,
@@ -197,9 +289,43 @@ class SessionWorkflow:
                 return ProcessingResult("in_progress", claim.session_id)
             with self.checkpointer_factory() as checkpointer:
                 graph = build_session_graph(checkpointer)
+                config = {"configurable": {"thread_id": str(claim.session_id)}}
+                prior_state = graph.get_state(config).values
+                already_processed = (
+                    prior_state.get("last_processed_update_id") == message.update_id
+                )
+                prior_intent = Intent.from_dict(prior_state.get("intent")) or Intent()
+                if not already_processed and command == "handoff":
+                    handoff = (
+                        self.handoff_service.request(
+                            session_id=claim.session_id,
+                            channel=message.channel,
+                            update_id=message.update_id,
+                            correlation_id=message.correlation_id,
+                        )
+                        if self.handoff_service is not None
+                        else None
+                    )
+                    initial_state["handoff_status"] = (
+                        handoff.status if handoff else "disabled"
+                    )
+                elif (
+                    not already_processed
+                    and command != "start"
+                    and not _GREETING.fullmatch(message.text.strip())
+                ):
+                    decision = self._extract(
+                        message,
+                        claim.session_id,
+                        prior_intent,
+                    )
+                    initial_state["prepared_intent"] = decision.intent.to_dict()
+                    initial_state["prepared_provenance"] = decision.provenance.to_dict()
+                    initial_state["extraction_status"] = decision.status
+                    initial_state["clarification_field"] = decision.clarification_field
                 state = graph.invoke(
                     initial_state,
-                    config={"configurable": {"thread_id": str(claim.session_id)}},
+                    config=config,
                 )
             reply_text = state.get("reply_text")
             if not isinstance(reply_text, str) or not reply_text:
@@ -213,6 +339,35 @@ class SessionWorkflow:
                 workflow_version=WORKFLOW_VERSION,
             )
         return ProcessingResult("claimed", claim.session_id, reply_text)
+
+    def _extract(
+        self, message: IncomingMessage, session_id: UUID, previous: Intent
+    ) -> IntentDecision:
+        if self.intent_extraction is not None:
+            return self.intent_extraction.extract(
+                message.text,
+                previous,
+                session_id=session_id,
+                channel=message.channel,
+                update_id=message.update_id,
+                correlation_id=message.correlation_id,
+            )
+        status = "suspected_injection" if is_prompt_injection(message.text) else "normal"
+        provenance = IntentProvenance(
+            intent_version=INTENT_VERSION,
+            prompt_version=PROMPT_VERSION,
+            workflow_version=WORKFLOW_VERSION,
+            configuration_version="unconfigured",
+            source_update_id=message.update_id,
+            correlation_id=message.correlation_id,
+            safety_classification=status,
+        )
+        return IntentDecision(
+            "injection" if status == "suspected_injection" else "fallback",
+            previous,
+            "none",
+            provenance,
+        )
 
     def claim_reply(
         self, update_id: int, *, channel: str = "telegram"

@@ -1,4 +1,6 @@
 import re
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
@@ -34,6 +36,25 @@ class Settings(BaseSettings):
     pixel_telegram_typing_threshold_seconds: float = Field(default=3.0, ge=0.1, le=30)
     pixel_context_reference_secret: SecretStr = Field(default=SecretStr(""))
     pixel_context_reference_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
+    pixel_openai_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("PIXEL_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    )
+    pixel_openai_model_snapshot: str = ""
+    pixel_ai_configuration_version: str = "intent-config.v1"
+    pixel_ai_input_usd_per_million_tokens: Decimal = Field(
+        default=Decimal("0"), ge=0, le=10000
+    )
+    pixel_ai_output_usd_per_million_tokens: Decimal = Field(
+        default=Decimal("0"), ge=0, le=10000
+    )
+    pixel_ai_max_input_tokens: int = Field(default=20000, ge=1, le=32000)
+    pixel_ai_max_output_tokens: int = Field(default=300, ge=1, le=4000)
+    pixel_ai_monthly_budget_usd: Decimal = Field(
+        default=Decimal("25.00"), gt=0, le=25
+    )
+    pixel_ai_reservation_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+    pixel_ai_ledger_retention_days: int = Field(default=180, ge=180, le=180)
 
     @field_validator("app_version")
     @classmethod
@@ -114,6 +135,35 @@ class Settings(BaseSettings):
         if secret and len(secret.encode("utf-8")) < 32:
             raise ValueError("PIXEL_CONTEXT_REFERENCE_SECRET must be at least 32 bytes")
         return value
+
+    @field_validator("pixel_openai_api_key")
+    @classmethod
+    def openai_api_key_has_no_control_characters(cls, value: SecretStr) -> SecretStr:
+        if any(ord(character) < 33 or ord(character) == 127 for character in value.get_secret_value()):
+            raise ValueError("OPENAI_API_KEY is invalid")
+        return value
+
+    @field_validator("pixel_openai_model_snapshot")
+    @classmethod
+    def openai_model_must_be_a_snapshot(cls, value: str) -> str:
+        snapshot = value.strip()
+        if snapshot and not re.fullmatch(r"[A-Za-z0-9._-]+-\d{4}-\d{2}-\d{2}", snapshot):
+            raise ValueError("PIXEL_OPENAI_MODEL_SNAPSHOT must be a dated model snapshot")
+        if snapshot:
+            try:
+                date.fromisoformat(snapshot[-10:])
+            except ValueError as exc:
+                raise ValueError(
+                    "PIXEL_OPENAI_MODEL_SNAPSHOT must contain a valid calendar date"
+                ) from exc
+        return snapshot
+
+    @field_validator("pixel_ai_configuration_version")
+    @classmethod
+    def ai_configuration_version_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip() or len(value) > 64:
+            raise ValueError("PIXEL_AI_CONFIGURATION_VERSION is invalid")
+        return value.strip()
 
 
 settings = Settings()

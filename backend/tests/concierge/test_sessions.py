@@ -77,7 +77,7 @@ def test_session_simulator_uses_same_versioned_workflow_and_persists_context() -
     assert session["context_game_id"] == game_id
     assert "Sandbox" in result.reply_text
     assert "game_id" not in result.reply_text
-    assert store._messages[("simulator", 1)]["workflow_version"] == "2.1.v1"
+    assert store._messages[("simulator", 1)]["workflow_version"] == "2.2.v1"
 
 
 @pytest.mark.parametrize("text", ["", "x" * 4097, "nul\x00byte", "bell\x07"])

@@ -1,0 +1,16 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "request": "human-review",
+  "states": ["requested"],
+  "required": ["id", "session_id", "channel", "external_update_id", "correlation_id", "requested_at"],
+  "unique_key": ["channel", "external_update_id"],
+  "notification": {
+    "durable": true,
+    "idempotent": true,
+    "recipient_count": 1,
+    "conversation_text_included": false,
+    "session_claimed": false
+  }
+}

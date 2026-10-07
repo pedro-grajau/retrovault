@@ -1,0 +1,13 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "command": "request-human",
+  "syntax": "/humano",
+  "transport": "telegram-or-simulator-message",
+  "input": ["session_id", "channel", "external_update_id", "correlation_id"],
+  "output": "idempotent-sandbox-handoff-request",
+  "recipient_policy": "exactly-one-allowlisted-user-id",
+  "errors": ["handoff_disabled", "handoff_unavailable"],
+  "does_not": ["claim-session", "forward-history", "start-human-relay"]
+}
