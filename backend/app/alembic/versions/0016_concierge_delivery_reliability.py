@@ -2,7 +2,7 @@
 
 from alembic import op
 
-revision = "0016_concierge_delivery_reliability"
+revision = "0016_concierge_reliability"
 down_revision = "0015_concierge_sessions"
 branch_labels = None
 depends_on = None
