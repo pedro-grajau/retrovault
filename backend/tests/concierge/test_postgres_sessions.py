@@ -227,6 +227,10 @@ class MessageLeaseEngineFake:
     def begin(self):  # type: ignore[no-untyped-def]
         yield self
 
+    @contextmanager
+    def connect(self):  # type: ignore[no-untyped-def]
+        yield self
+
     def execute(self, statement, parameters=None):  # type: ignore[no-untyped-def]
         sql = str(statement)
         args = dict(parameters or {})
