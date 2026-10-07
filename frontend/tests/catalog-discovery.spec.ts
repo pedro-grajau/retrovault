@@ -684,7 +684,7 @@ test("Detalhe ignora resposta de refresh antiga que chega depois da nova", async
   await expect(page.getByText("Indisponível no momento")).toHaveCount(0)
 })
 
-test("Pixel prepara referência contextual e oferece os dois destinos WhatsApp", async ({
+test("Pixel prepara referência contextual e abre o Telegram", async ({
   page,
 }) => {
   await mockVersion(page)
@@ -694,17 +694,16 @@ test("Pixel prepara referência contextual e oferece os dois destinos WhatsApp",
   await page.route(`**/api/v1/catalog/games/${gameId}/box-art`, (route) =>
     route.fulfill({ status: 404, body: "" }),
   )
+  const contextReference = `2${"A".repeat(44)}`
   let body: unknown
   await page.route("**/api/v1/concierge/context-references", async (route) => {
     body = route.request().postDataJSON()
     await route.fulfill({
       status: 201,
       json: {
-        reference: "v1.context.signature",
+        reference: contextReference,
         expires_at: "2099-10-01T12:00:00Z",
-        whatsapp_url: "https://wa.me/5500000000000?text=Pixel",
-        web_whatsapp_url:
-          "https://web.whatsapp.com/send?phone=5500000000000&text=Pixel",
+        telegram_url: `https://t.me/PixelBot?start=${contextReference}`,
       },
     })
   })
@@ -717,11 +716,9 @@ test("Pixel prepara referência contextual e oferece os dois destinos WhatsApp",
   await expect(page.getByText("Contexto do jogo preparado.")).toBeVisible()
   expect(body).toEqual({ game_id: gameId })
   await expect(
-    page.getByRole("link", { name: "Continuar no WhatsApp" }),
-  ).toHaveAttribute("href", /wa\.me/)
-  await expect(
-    page.getByRole("link", { name: "Usar WhatsApp Web" }),
-  ).toHaveAttribute("href", /web\.whatsapp\.com/)
+    page.getByRole("link", { name: "Continuar no Telegram" }),
+  ).toHaveAttribute("href", /t\.me\/PixelBot\?start=/)
+  expect(contextReference).toHaveLength(56)
 })
 
 test("Pixel prepara conversa global sem anexar jogo", async ({ page }) => {
@@ -740,9 +737,7 @@ test("Pixel prepara conversa global sem anexar jogo", async ({ page }) => {
       json: {
         reference: null,
         expires_at: null,
-        whatsapp_url: "https://wa.me/5500000000000?text=Pixel",
-        web_whatsapp_url:
-          "https://web.whatsapp.com/send?phone=5500000000000&text=Pixel",
+        telegram_url: "https://t.me/PixelBot",
       },
     })
   })

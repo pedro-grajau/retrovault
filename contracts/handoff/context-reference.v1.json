@@ -2,27 +2,32 @@
   "owner": "concierge",
   "version": 1,
   "status": "active",
-  "purpose": "Referência curta e assinada para associar um Jogo publicado à conversa da Sessão na história 2.1.",
+  "purpose": "Referência curta e assinada para associar um Jogo publicado à conversa Telegram da Sessão na história 2.1.",
   "reference": {
-    "format": "v1.<base64url-json>.<base64url-hmac-sha256>",
-    "claims": ["v", "game_id", "exp"],
+    "format": "2<base64url(payload+truncated-hmac-sha256)>",
+    "claims": ["v", "game_id", "exp", "nonce"],
+    "max_parameter_characters": 64,
+    "actual_parameter_characters": 56,
+    "allowed_characters": "A-Za-z0-9_-",
     "ttl_seconds_default": 1800,
     "ttl_seconds_configurable": true,
     "secret_config": "PIXEL_CONTEXT_REFERENCE_SECRET",
     "secret_minimum_bytes": 32,
     "allowed_context": ["published_game_id", "expiration"],
     "forbidden_context": ["personal_data", "price", "visitor_parameters", "editorial_copy", "commerce_facts"],
-    "validation": ["signature", "version", "expiration", "game_still_published"],
+    "validation": ["signature", "version", "expiration", "game_still_published", "single_use_on_first_valid_start", "update_id_idempotency"],
+    "replay_protection_store": "sha256-token-hash",
+    "legacy_formats_supported_until_expiry": ["v1.<base64url-json>.<base64url-hmac-sha256>"],
     "invalid_reference_result": "reject_without_associating_context"
   },
-  "destination_config": "PIXEL_WHATSAPP_NUMBER",
+  "destination_config": "PIXEL_TELEGRAM_BOT_USERNAME",
   "endpoints": [
     {
       "method": "POST",
       "path": "/api/v1/concierge/context-references",
       "request": {"game_id": "UUID|null"},
-      "response": ["reference", "expires_at", "whatsapp_url", "web_whatsapp_url"],
-      "notes": ["game_id omitted creates a generic Home entry with no game context", "WhatsApp opens only after a visitor follows a returned link"]
+      "response": ["reference", "expires_at", "telegram_url"],
+      "notes": ["game_id omitted creates a generic Home entry with no game context", "Telegram opens only after a visitor follows a returned t.me deep link", "valid game references fit the Telegram start parameter without truncation"]
     },
     {
       "method": "POST",

@@ -1,0 +1,26 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "adapter": "telegram-bot",
+  "transport": "https-webhook-and-bot-api",
+  "webhook": {
+    "path": "/api/v1/concierge/telegram/webhook",
+    "secret_header": "X-Telegram-Bot-Api-Secret-Token",
+    "max_body_bytes_default": 65536,
+    "allowed_update": "private-chat-text-message",
+    "allowed_user_ids_config": "PIXEL_TELEGRAM_ALLOWED_USER_IDS",
+    "deduplication_key": "update_id",
+    "max_text_characters": 4096,
+    "max_automatic_message_age_seconds": 900,
+    "unsupported_and_unapproved_updates": "acknowledge-without-persisting"
+  },
+  "outbound": {
+    "bot_token_config": "PIXEL_TELEGRAM_BOT_TOKEN",
+    "bot_username_config": "PIXEL_TELEGRAM_BOT_USERNAME",
+    "methods": ["sendMessage", "sendChatAction:typing"],
+    "retry_delivery": "durable-outbox-with-leased-independent-redrive",
+    "delivery_semantics": "at-least-once; ambiguous-provider-timeout-can-duplicate"
+  },
+  "ci": {"network_calls": false, "adapter": "simulator"}
+}

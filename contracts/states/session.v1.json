@@ -1,0 +1,17 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "state_machine": "conversation-session",
+  "workflow_version": "2.1.v1",
+  "states": ["active", "terminal"],
+  "terminal_states": ["terminal"],
+  "terminal_state_reversible": false,
+  "checkpoint_store": "PostgreSQL LangGraph PostgresSaver",
+  "deduplication": "channel-and-update_id",
+  "message_processing_lease": "fenced-by-lease-token",
+  "outbox_delivery": "leased-with-skip-locked-claims-and-independent-redrive",
+  "late_or_out_of_order_handling": "persist-for-reconciliation-without-automatic-reply",
+  "retention_days_config": "PIXEL_TELEGRAM_RETENTION_DAYS",
+  "retention_days_default": 30
+}

@@ -10,6 +10,7 @@
     {"method": "GET", "path": "/api/v1/catalog/games/{game_id}", "owner": "catalog", "auth": "public", "etag": "strong"},
     {"method": "GET", "path": "/api/v1/catalog/games/{game_id}/box-art", "owner": "catalog", "auth": "public", "etag": "content-hash"},
     {"method": "POST", "path": "/api/v1/concierge/context-references", "owner": "concierge", "auth": "public"},
-    {"method": "POST", "path": "/api/v1/concierge/context-references/validate", "owner": "concierge", "auth": "public"}
+    {"method": "POST", "path": "/api/v1/concierge/context-references/validate", "owner": "concierge", "auth": "public"},
+    {"method": "POST", "path": "/api/v1/concierge/telegram/webhook", "owner": "concierge", "auth": "telegram-webhook-secret"}
   ]
 }

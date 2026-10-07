@@ -68,8 +68,7 @@ export function getGameDetails(
 export type PixelEntryResponse = {
   reference: string | null
   expires_at: string | null
-  whatsapp_url: string
-  web_whatsapp_url: string
+  telegram_url: string
 }
 
 export async function createPixelEntry(
