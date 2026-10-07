@@ -7,12 +7,11 @@ import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from typing import Any, NotRequired
+from typing import Any, NotRequired, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.graph.state import CompiledStateGraph
 from typing_extensions import TypedDict
 
 from app.modules.concierge.application.context_reference import (
@@ -95,8 +94,8 @@ def _entry_node(state: SessionState) -> dict[str, object]:
 
 def build_session_graph(
     checkpointer: BaseCheckpointSaver[str],
-) -> CompiledStateGraph[SessionState, Any, SessionState, SessionState]:
-    builder = StateGraph(SessionState)
+) -> Any:
+    builder = StateGraph(cast(Any, SessionState))
     builder.add_node("secure_entry", _entry_node)
     builder.add_edge(START, "secure_entry")
     builder.add_edge("secure_entry", END)
