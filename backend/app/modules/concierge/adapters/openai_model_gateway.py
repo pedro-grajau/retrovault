@@ -9,7 +9,7 @@ from uuid import UUID
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
-from app.modules.concierge.domain.intent import Intent, IntentExtractionPayload
+from app.modules.concierge.domain.intent import Intent
 from app.modules.concierge.ports.models import (
     ModelCallFailure,
     ModelExtraction,
@@ -26,10 +26,51 @@ _FIXED_MESSAGE_OVERHEAD_TOKENS = 256
 
 
 def strict_intent_schema() -> dict[str, Any]:
-    schema = IntentExtractionPayload.model_json_schema()
-    schema.pop("title", None)
-    schema["additionalProperties"] = False
-    return schema
+    def nullable_text(maximum: int) -> dict[str, Any]:
+        return {
+            "anyOf": [
+                {"type": "string", "maxLength": maximum},
+                {"type": "null"},
+            ]
+        }
+
+    def nullable_integer(minimum: int, maximum: int) -> dict[str, Any]:
+        return {
+            "anyOf": [
+                {"type": "integer", "minimum": minimum, "maximum": maximum},
+                {"type": "null"},
+            ]
+        }
+    properties = {
+        "platform": nullable_text(48),
+        "genre": nullable_text(64),
+        "style": nullable_text(96),
+        "players": nullable_integer(1, 12),
+        "price_min_brl_cents": nullable_integer(0, 100_000_000),
+        "price_max_brl_cents": nullable_integer(0, 100_000_000),
+        "constraints": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 120},
+            "maxItems": 5,
+        },
+        "clarification_field": {
+            "type": "string",
+            "enum": [
+                "platform",
+                "genre",
+                "style",
+                "players",
+                "price_range",
+                "none",
+            ],
+        },
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
 
 
 class OpenAIModelGateway:

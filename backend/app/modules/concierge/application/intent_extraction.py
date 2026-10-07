@@ -7,8 +7,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from pydantic import ValidationError
-
 from app.modules.concierge.domain.ai_ledger import (
     AiLedgerUnavailable,
     AiPricing,
@@ -162,8 +160,8 @@ class IntentExtractionService:
             return self._fallback(prior, update_id, correlation_id, safety)
 
         try:
-            extracted = IntentExtractionPayload.model_validate_json(result.output_json)
-        except (ValidationError, ValueError, TypeError):
+            extracted = IntentExtractionPayload.from_json(result.output_json)
+        except (ValueError, TypeError):
             return self._fallback(prior, update_id, correlation_id, safety)
         merged = merge_intent(prior, extracted)
         return self._decision(

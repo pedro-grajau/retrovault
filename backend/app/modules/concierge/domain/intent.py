@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Literal, cast
 from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 INTENT_VERSION = "intent.v1"
 PROMPT_VERSION = "intent-extraction.v1"
@@ -52,8 +51,8 @@ class Intent:
             payload_value = dict(value)
             if isinstance(payload_value.get("constraints"), tuple):
                 payload_value["constraints"] = list(payload_value["constraints"])
-            payload = IntentPayload.model_validate(payload_value)
-        except ValidationError:
+            payload = IntentPayload.from_mapping(payload_value)
+        except (TypeError, ValueError):
             return None
         return cls(
             platform=payload.platform,
@@ -66,37 +65,126 @@ class Intent:
         )
 
 
-class IntentPayload(BaseModel):
+@dataclass(frozen=True)
+class IntentPayload:
     """Strict provider output for the six fields allowed by this story."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    platform: str | None
+    genre: str | None
+    style: str | None
+    players: int | None
+    price_min_brl_cents: int | None
+    price_max_brl_cents: int | None
+    constraints: tuple[str, ...]
 
-    platform: str | None = Field(max_length=48)
-    genre: str | None = Field(max_length=64)
-    style: str | None = Field(max_length=96)
-    players: int | None = Field(ge=1, le=12)
-    price_min_brl_cents: int | None = Field(ge=0, le=100_000_000)
-    price_max_brl_cents: int | None = Field(ge=0, le=100_000_000)
-    constraints: list[Annotated[str, Field(max_length=120)]] = Field(max_length=5)
+    @classmethod
+    def from_mapping(cls, value: object) -> IntentPayload:
+        if type(value) is not dict:
+            raise ValueError("invalid_intent_object")
+        values = cast(dict[str, object], value)
+        fields = {
+            "platform",
+            "genre",
+            "style",
+            "players",
+            "price_min_brl_cents",
+            "price_max_brl_cents",
+            "constraints",
+        }
+        if set(values) != fields:
+            raise ValueError("invalid_intent_fields")
 
-    @model_validator(mode="after")
-    def validate_price_range(self) -> IntentPayload:
-        if (
-            self.price_min_brl_cents is not None
-            and self.price_max_brl_cents is not None
-            and self.price_min_brl_cents > self.price_max_brl_cents
-        ):
+        platform = _optional_text(values["platform"], max_length=48)
+        genre = _optional_text(values["genre"], max_length=64)
+        style = _optional_text(values["style"], max_length=96)
+        players = _optional_integer(values["players"], minimum=1, maximum=12)
+        minimum = _optional_integer(
+            values["price_min_brl_cents"], minimum=0, maximum=100_000_000
+        )
+        maximum = _optional_integer(
+            values["price_max_brl_cents"], minimum=0, maximum=100_000_000
+        )
+        constraints = _constraints(values["constraints"])
+        if minimum is not None and maximum is not None and minimum > maximum:
             raise ValueError("invalid_price_range")
-        for value in (self.platform, self.genre, self.style, *self.constraints):
-            if value is not None and (not value.strip() or any(ord(c) < 32 for c in value)):
-                raise ValueError("invalid_intent_text")
-        return self
+        return cls(platform, genre, style, players, minimum, maximum, constraints)
 
 
+@dataclass(frozen=True)
 class IntentExtractionPayload(IntentPayload):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
     clarification_field: ClarificationField
+
+    @classmethod
+    def from_json(cls, value: str) -> IntentExtractionPayload:
+        payload = json.loads(value)
+        if type(payload) is not dict:
+            raise ValueError("invalid_intent_extraction_fields")
+        payload_values = cast(dict[str, object], payload)
+        if set(payload_values) != {
+            "platform",
+            "genre",
+            "style",
+            "players",
+            "price_min_brl_cents",
+            "price_max_brl_cents",
+            "constraints",
+            "clarification_field",
+        }:
+            raise ValueError("invalid_intent_extraction_fields")
+        clarification = payload_values["clarification_field"]
+        if clarification not in ("platform", "genre", "style", "players", "price_range", "none"):
+            raise ValueError("invalid_clarification_field")
+        clarification_field = cast(ClarificationField, clarification)
+        intent = IntentPayload.from_mapping(
+            {
+                key: payload_values[key]
+                for key in payload_values
+                if key != "clarification_field"
+            }
+        )
+        return cls(
+            intent.platform,
+            intent.genre,
+            intent.style,
+            intent.players,
+            intent.price_min_brl_cents,
+            intent.price_max_brl_cents,
+            intent.constraints,
+            clarification_field,
+        )
+
+
+def _optional_text(value: object, *, max_length: int) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str or len(value) > max_length:
+        raise ValueError("invalid_intent_text")
+    if not value.strip() or any(ord(character) < 32 for character in value):
+        raise ValueError("invalid_intent_text")
+    return value
+
+
+def _optional_integer(
+    value: object, *, minimum: int, maximum: int
+) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < minimum or value > maximum:
+        raise ValueError("invalid_intent_integer")
+    return value
+
+
+def _constraints(value: object) -> tuple[str, ...]:
+    if type(value) is not list or len(value) > 5:
+        raise ValueError("invalid_intent_constraints")
+    return tuple(_required_text(item, max_length=120) for item in value)
+
+
+def _required_text(value: object, *, max_length: int) -> str:
+    result = _optional_text(value, max_length=max_length)
+    if result is None:
+        raise ValueError("invalid_intent_text")
+    return result
 
 
 @dataclass(frozen=True)

@@ -57,7 +57,7 @@ def intent_payload(**overrides: object) -> IntentPayload:
         "constraints": [],
     }
     value.update(overrides)
-    return IntentPayload.model_validate(value)
+    return IntentPayload.from_mapping(value)
 
 
 class FakeLedger:
