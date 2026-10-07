@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import ContextManager
+from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -15,7 +15,9 @@ from app.modules.concierge.domain.session import (
 
 
 class SessionStore(Protocol):
-    def session_processing_lock(self, session_id: UUID) -> ContextManager[None]: ...
+    def session_processing_lock(
+        self, session_id: UUID
+    ) -> AbstractContextManager[None]: ...
 
     def is_processing_lease_current(
         self,

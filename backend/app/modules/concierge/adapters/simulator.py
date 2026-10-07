@@ -8,7 +8,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from threading import Lock
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
 from app.modules.concierge.domain.session import (
@@ -16,6 +16,7 @@ from app.modules.concierge.domain.session import (
     MessageClaim,
     OutboxReply,
     ProcessingResult,
+    SessionChannel,
 )
 
 
@@ -194,16 +195,20 @@ class InMemorySessionStore:
                 session["last_message_id"] = message.message_id
                 if context_game_id is not None:
                     session["context_game_id"] = context_game_id
+            session_id = cast(UUID, session["id"])
+            session_context_game_id = cast(
+                UUID | None, session["context_game_id"]
+            )
             if context_reference_hash is not None and not context_reference_replayed:
-                self._context_reference_uses[context_reference_hash] = session["id"]
+                self._context_reference_uses[context_reference_hash] = session_id
             processing_lease_token = uuid4()
             self._messages[message_key] = {
                 "status": "processing",
-                "session_id": session["id"],
+                "session_id": session_id,
                 "external_user_id": message.external_user_id,
                 "external_chat_id": message.external_chat_id,
                 "external_message_id": message.message_id,
-                "context_game_id": session["context_game_id"],
+                "context_game_id": session_context_game_id,
                 "created_session": created,
                 "safe_text": safe_text,
                 "received_at": message.received_at,
@@ -217,8 +222,8 @@ class InMemorySessionStore:
             }
             return MessageClaim(
                 "claimed",
-                session["id"],
-                session["context_game_id"],
+                session_id,
+                session_context_game_id,
                 created,
                 context_reference_replayed=context_reference_replayed,
                 processing_lease_token=processing_lease_token,
@@ -310,7 +315,7 @@ class InMemorySessionStore:
         record["delivery_lease_until"] = now + timedelta(seconds=lease_seconds)
         return OutboxReply(
             id=uuid4(),
-            channel=channel,
+            channel=cast(SessionChannel, channel),
             update_id=update_id,
             chat_id=record["external_chat_id"],
             text=record["reply"],

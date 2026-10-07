@@ -6,13 +6,13 @@ import hashlib
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-from psycopg.rows import dict_row
+from psycopg.rows import RowFactory, dict_row
 from sqlalchemy import Connection, Engine, make_url, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,11 +44,12 @@ class PostgresCheckpointFactory:
             hide_password=False
         )
         try:
+            row_factory = cast(RowFactory[dict[str, Any]], dict_row)
             with psycopg.connect(
                 dsn,
                 autocommit=True,
                 options="-c search_path=concierge",
-                row_factory=dict_row,
+                row_factory=row_factory,
             ) as connection:
                 checkpointer = PostgresSaver(
                     connection,

@@ -7,12 +7,13 @@ import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from typing_extensions import TypedDict
 
 from app.modules.concierge.application.context_reference import (
     ContextReferenceService,
