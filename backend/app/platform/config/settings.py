@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
@@ -23,7 +24,14 @@ class Settings(BaseSettings):
         ),
     )
     retroachievements_cache_dir: Path = PROJECT_ROOT / ".cache" / "retroachievements"
-    pixel_whatsapp_number: str = ""
+    pixel_telegram_bot_token: SecretStr = Field(default=SecretStr(""))
+    pixel_telegram_bot_username: str = ""
+    pixel_telegram_webhook_secret: SecretStr = Field(default=SecretStr(""))
+    pixel_telegram_allowed_user_ids: str = ""
+    pixel_telegram_webhook_max_body_bytes: int = Field(default=65536, ge=1024, le=1048576)
+    pixel_telegram_message_max_age_seconds: int = Field(default=900, ge=60, le=3600)
+    pixel_telegram_retention_days: int = Field(default=30, ge=1, le=365)
+    pixel_telegram_typing_threshold_seconds: float = Field(default=3.0, ge=0.1, le=30)
     pixel_context_reference_secret: SecretStr = Field(default=SecretStr(""))
     pixel_context_reference_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
 
@@ -48,14 +56,56 @@ class Settings(BaseSettings):
             raise ValueError("RETROACHIEVEMENTS_API_KEY is invalid")
         return value
 
-    @field_validator("pixel_whatsapp_number")
+    @field_validator("pixel_telegram_bot_token")
     @classmethod
-    def whatsapp_number_must_be_international_digits(cls, value: str) -> str:
-        if value and (
-            not value.isascii() or not value.isdigit() or not 8 <= len(value) <= 15
-        ):
-            raise ValueError("PIXEL_WHATSAPP_NUMBER must contain 8 to 15 digits")
+    def telegram_bot_token_must_not_contain_control_characters(
+        cls, value: SecretStr
+    ) -> SecretStr:
+        token = value.get_secret_value()
+        if any(ord(character) < 33 or ord(character) == 127 for character in token):
+            raise ValueError("PIXEL_TELEGRAM_BOT_TOKEN is invalid")
         return value
+
+    @field_validator("pixel_telegram_bot_username")
+    @classmethod
+    def telegram_username_is_valid(cls, value: str) -> str:
+        username = value.removeprefix("@")
+        if username and not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            raise ValueError("PIXEL_TELEGRAM_BOT_USERNAME is invalid")
+        return username
+
+    @field_validator("pixel_telegram_webhook_secret")
+    @classmethod
+    def telegram_webhook_secret_is_valid(cls, value: SecretStr) -> SecretStr:
+        secret = value.get_secret_value()
+        if secret and (
+            not 32 <= len(secret) <= 256
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", secret)
+        ):
+            raise ValueError(
+                "PIXEL_TELEGRAM_WEBHOOK_SECRET must be 32 to 256 URL-safe characters"
+            )
+        return value
+
+    @field_validator("pixel_telegram_allowed_user_ids")
+    @classmethod
+    def telegram_user_ids_are_valid(cls, value: str) -> str:
+        if not value:
+            return value
+        parts = value.split(",")
+        if (
+            len(parts) > 1000
+            or any(not part.isascii() or not part.isdigit() or int(part) <= 0 for part in parts)
+            or len(set(parts)) != len(parts)
+        ):
+            raise ValueError("PIXEL_TELEGRAM_ALLOWED_USER_IDS must be unique positive IDs")
+        return value
+
+    @property
+    def telegram_user_allowlist(self) -> frozenset[int]:
+        return frozenset(
+            int(value) for value in self.pixel_telegram_allowed_user_ids.split(",") if value
+        )
 
     @field_validator("pixel_context_reference_secret")
     @classmethod

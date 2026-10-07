@@ -1,6 +1,9 @@
 import os
 import runpy
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
@@ -10,6 +13,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
+from app.modules.concierge.adapters.postgres_sessions import (
+    PostgresSessionRepository,
+    SessionLeaseLost,
+)
+from app.modules.concierge.domain.session import IncomingMessage
 from app.platform.config.settings import settings
 
 
@@ -50,6 +58,11 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
         database_url.render_as_string(hide_password=False),
     )
     game_id, offer_id = uuid4(), uuid4()
+    legacy_session_id = uuid4()
+    legacy_processing_message_id = uuid4()
+    legacy_update_id = 7001
+    legacy_user_id = f"migration-user-{uuid4().hex}"
+    legacy_correlation_id = uuid4()
     media_hash = "a" * 64
     published_game_ids = [
         uuid5(NAMESPACE_URL, f"retrovault:closeout:published-game:{index}")
@@ -80,7 +93,310 @@ def test_closeout_migrations_preserve_commerce_and_guard_staging_truncate(
                 {"id": unit_id, "offer": offer_id},
             )
 
+        command.upgrade(config, "0015_concierge_sessions")
+        with test_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    INSERT INTO concierge.sessions (
+                        id, channel, external_user_id, external_chat_id,
+                        context_game_id, status, workflow_version, correlation_id,
+                        started_at, updated_at, last_message_at, last_message_id
+                    ) VALUES (
+                        :id, 'telegram', :user_id, :chat_id, NULL, 'active',
+                        '2.1.v1', :correlation_id, now(), now(), now(), 7001
+                    )
+                """),
+                {
+                    "id": legacy_session_id,
+                    "user_id": legacy_user_id,
+                    "chat_id": legacy_user_id,
+                    "correlation_id": legacy_correlation_id,
+                },
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO concierge.messages (
+                        id, session_id, channel, external_update_id,
+                        external_message_id, external_user_id, external_chat_id,
+                        text, sent_at, received_at, status, lease_until,
+                        correlation_id
+                    ) VALUES (
+                        :id, :session_id, 'telegram', :update_id, 7001,
+                        :user_id, :chat_id, 'Mensagem em processamento',
+                        now(), now(), 'processing', NULL, :correlation_id
+                    )
+                """),
+                {
+                    "id": legacy_processing_message_id,
+                    "session_id": legacy_session_id,
+                    "update_id": legacy_update_id,
+                    "user_id": legacy_user_id,
+                    "chat_id": legacy_user_id,
+                    "correlation_id": legacy_correlation_id,
+                },
+            )
+
         command.upgrade(config, "head")
+        with test_engine.connect() as connection:
+            backfilled_lease = connection.execute(
+                text("""
+                    SELECT lease_token, lease_until
+                    FROM concierge.messages WHERE id=:id
+                """),
+                {"id": legacy_processing_message_id},
+            ).one()
+        assert backfilled_lease.lease_token is not None
+        assert backfilled_lease.lease_until is not None
+
+        # Exercise actual advisory-lock exclusion on separate PostgreSQL
+        # connections, matching workers running in different app processes.
+        repository = PostgresSessionRepository(test_engine)
+        lock_session_id = uuid4()
+        attempting, acquired = Event(), Event()
+
+        def acquire_session_lock() -> None:
+            attempting.set()
+            with repository.session_processing_lock(lock_session_id):
+                acquired.set()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with repository.session_processing_lock(lock_session_id):
+                lock_future = pool.submit(acquire_session_lock)
+                assert attempting.wait(timeout=2)
+                assert not acquired.wait(timeout=0.1)
+            lock_future.result(timeout=5)
+        assert acquired.is_set()
+
+        # A reclaimed message lease fences the old worker; the current worker
+        # can complete and its Telegram outbox entry is claimable from PostgreSQL.
+        now = datetime.now(UTC)
+        context_reference_hash = "b" * 64
+        contextual_message = IncomingMessage(
+            channel="telegram",
+            external_user_id=f"context-user-{uuid4().hex}",
+            external_chat_id=f"context-chat-{uuid4().hex}",
+            update_id=7102,
+            message_id=1,
+            text="/start [context reference redacted]",
+            sent_at=now,
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        contextual_claim = repository.claim_message(
+            contextual_message,
+            safe_text=contextual_message.text,
+            context_game_id=game_id,
+            context_reference_hash=context_reference_hash,
+            now=now,
+            max_age_seconds=900,
+        )
+        replayed_context_message = IncomingMessage(
+            channel="telegram",
+            external_user_id=f"context-replay-user-{uuid4().hex}",
+            external_chat_id=f"context-replay-chat-{uuid4().hex}",
+            update_id=7103,
+            message_id=1,
+            text="/start [context reference redacted]",
+            sent_at=now,
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        replayed_context_claim = repository.claim_message(
+            replayed_context_message,
+            safe_text=replayed_context_message.text,
+            context_game_id=game_id,
+            context_reference_hash=context_reference_hash,
+            now=now,
+            max_age_seconds=900,
+        )
+        assert contextual_claim.context_game_id == game_id
+        assert contextual_claim.context_reference_replayed is False
+        assert replayed_context_claim.context_game_id is None
+        assert replayed_context_claim.context_reference_replayed is True
+
+        telegram_message = IncomingMessage(
+            channel="telegram",
+            external_user_id=f"repo-user-{uuid4().hex}",
+            external_chat_id=f"repo-chat-{uuid4().hex}",
+            update_id=7101,
+            message_id=7101,
+            text="Mensagem de integração",
+            sent_at=now,
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        first_claim = repository.claim_message(
+            telegram_message,
+            safe_text=telegram_message.text,
+            context_game_id=None,
+            now=now,
+            max_age_seconds=900,
+        )
+        assert first_claim.processing_lease_token is not None
+        with test_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE concierge.messages SET lease_until=:expired_at
+                    WHERE channel=:channel AND external_update_id=:update_id
+                """),
+                {
+                    "expired_at": now - timedelta(seconds=1),
+                    "channel": telegram_message.channel,
+                    "update_id": telegram_message.update_id,
+                },
+            )
+        reclaimed_claim = repository.claim_message(
+            telegram_message,
+            safe_text=telegram_message.text,
+            context_game_id=None,
+            now=now + timedelta(minutes=3),
+            max_age_seconds=900,
+        )
+        assert reclaimed_claim.processing_lease_token is not None
+        assert reclaimed_claim.processing_lease_token != first_claim.processing_lease_token
+        assert reclaimed_claim.session_id == first_claim.session_id
+        assert first_claim.session_id is not None
+        assert not repository.is_processing_lease_current(
+            telegram_message.update_id,
+            channel=telegram_message.channel,
+            session_id=first_claim.session_id,
+            processing_lease_token=first_claim.processing_lease_token,
+            now=now + timedelta(minutes=3),
+        )
+        assert repository.is_processing_lease_current(
+            telegram_message.update_id,
+            channel=telegram_message.channel,
+            session_id=reclaimed_claim.session_id,
+            processing_lease_token=reclaimed_claim.processing_lease_token,
+            now=now + timedelta(minutes=3),
+        )
+        with pytest.raises(SessionLeaseLost):
+            repository.complete_message(
+                telegram_message.update_id,
+                channel=telegram_message.channel,
+                session_id=first_claim.session_id,
+                processing_lease_token=first_claim.processing_lease_token,
+                reply_text="Resposta antiga",
+                workflow_version="2.1.v1",
+            )
+        repository.complete_message(
+            telegram_message.update_id,
+            channel=telegram_message.channel,
+            session_id=reclaimed_claim.session_id,
+            processing_lease_token=reclaimed_claim.processing_lease_token,
+            reply_text="Resposta atual",
+            workflow_version="2.1.v1",
+        )
+        out_of_order_message = IncomingMessage(
+            channel="telegram",
+            external_user_id=telegram_message.external_user_id,
+            external_chat_id=telegram_message.external_chat_id,
+            update_id=7104,
+            message_id=telegram_message.message_id - 1,
+            text="Mensagem atrasada",
+            sent_at=now - timedelta(seconds=1),
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        out_of_order_claim = repository.claim_message(
+            out_of_order_message,
+            safe_text=out_of_order_message.text,
+            context_game_id=None,
+            now=now,
+            max_age_seconds=900,
+        )
+        assert out_of_order_claim.status == "reconciliation"
+        assert out_of_order_claim.session_id == reclaimed_claim.session_id
+
+        simulator_message = IncomingMessage(
+            channel="simulator",
+            external_user_id=f"sim-user-{uuid4().hex}",
+            external_chat_id=f"sim-chat-{uuid4().hex}",
+            update_id=7201,
+            message_id=7201,
+            text="Simulação sem Telegram",
+            sent_at=now,
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        simulator_claim = repository.claim_message(
+            simulator_message,
+            safe_text=simulator_message.text,
+            context_game_id=None,
+            now=now,
+            max_age_seconds=900,
+        )
+        assert simulator_claim.session_id is not None
+        assert simulator_claim.processing_lease_token is not None
+        repository.complete_message(
+            simulator_message.update_id,
+            channel=simulator_message.channel,
+            session_id=simulator_claim.session_id,
+            processing_lease_token=simulator_claim.processing_lease_token,
+            reply_text="Resposta simulada",
+            workflow_version="2.1.v1",
+        )
+        pending = repository.claim_pending_replies(
+            now=datetime.now(UTC) + timedelta(seconds=1), limit=20
+        )
+        assert [reply.update_id for reply in pending] == [
+            telegram_message.update_id
+        ]
+        assert pending[0].channel == "telegram"
+        assert repository.release_reply(
+            telegram_message.update_id,
+            channel="telegram",
+            lease_token=pending[0].lease_token,
+        )
+        assert repository.claim_pending_replies(
+            now=datetime.now(UTC) + timedelta(seconds=1), limit=20
+        ) == []
+        retried = repository.claim_pending_replies(
+            now=datetime.now(UTC) + timedelta(seconds=31), limit=20
+        )
+        assert [reply.update_id for reply in retried] == [
+            telegram_message.update_id
+        ]
+        assert retried[0].lease_token != pending[0].lease_token
+        assert not repository.mark_reply_delivered(
+            telegram_message.update_id,
+            channel="telegram",
+            lease_token=pending[0].lease_token,
+        )
+        assert repository.mark_reply_delivered(
+            telegram_message.update_id,
+            channel="telegram",
+            lease_token=retried[0].lease_token,
+        )
+
+        # A row lock lets a refresh that began first win; the purge's delete
+        # rechecks updated_at and must leave that refreshed session in place.
+        with test_engine.begin() as connection:
+            connection.execute(
+                text("""
+                    UPDATE concierge.sessions
+                    SET updated_at=now() - INTERVAL '31 days'
+                    WHERE id=:session_id
+                """),
+                {"session_id": legacy_session_id},
+            )
+        refresh_connection = test_engine.connect()
+        refresh_transaction = refresh_connection.begin()
+        try:
+            refresh_connection.execute(
+                text("SELECT id FROM concierge.sessions WHERE id=:id FOR UPDATE"),
+                {"id": legacy_session_id},
+            )
+            refresh_connection.execute(
+                text("UPDATE concierge.sessions SET updated_at=now() WHERE id=:id"),
+                {"id": legacy_session_id},
+            )
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                purge_future = pool.submit(repository.purge_expired_sessions, 30)
+                refresh_transaction.commit()
+                assert purge_future.result(timeout=5) == 0
+        finally:
+            refresh_connection.close()
         with test_engine.begin() as connection:
             connection.execute(
                 text("""

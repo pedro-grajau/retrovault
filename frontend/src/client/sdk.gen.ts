@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { createContextReferenceApiV1ConciergeContextReferencesPostData, createContextReferenceApiV1ConciergeContextReferencesPostErrors, createContextReferenceApiV1ConciergeContextReferencesPostResponses, getBoxArtApiV1CatalogGamesGameIdBoxArtGetData, getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors, getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses, getGameApiV1CatalogGamesGameIdGetData, getGameApiV1CatalogGamesGameIdGetErrors, getGameApiV1CatalogGamesGameIdGetResponses, healthApiV1HealthGetData, healthApiV1HealthGetErrors, healthApiV1HealthGetResponses, listFacetsApiV1CatalogFacetsGetData, listFacetsApiV1CatalogFacetsGetErrors, listFacetsApiV1CatalogFacetsGetResponses, listGamesApiV1CatalogGamesGetData, listGamesApiV1CatalogGamesGetErrors, listGamesApiV1CatalogGamesGetResponses, validateContextReferenceApiV1ConciergeContextReferencesValidatePostData, validateContextReferenceApiV1ConciergeContextReferencesValidatePostErrors, validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponses, versionApiV1SystemVersionGetData, versionApiV1SystemVersionGetErrors, versionApiV1SystemVersionGetResponses } from './types.gen';
+import type { createContextReferenceApiV1ConciergeContextReferencesPostData, createContextReferenceApiV1ConciergeContextReferencesPostErrors, createContextReferenceApiV1ConciergeContextReferencesPostResponses, getBoxArtApiV1CatalogGamesGameIdBoxArtGetData, getBoxArtApiV1CatalogGamesGameIdBoxArtGetErrors, getBoxArtApiV1CatalogGamesGameIdBoxArtGetResponses, getGameApiV1CatalogGamesGameIdGetData, getGameApiV1CatalogGamesGameIdGetErrors, getGameApiV1CatalogGamesGameIdGetResponses, healthApiV1HealthGetData, healthApiV1HealthGetErrors, healthApiV1HealthGetResponses, listFacetsApiV1CatalogFacetsGetData, listFacetsApiV1CatalogFacetsGetErrors, listFacetsApiV1CatalogFacetsGetResponses, listGamesApiV1CatalogGamesGetData, listGamesApiV1CatalogGamesGetErrors, listGamesApiV1CatalogGamesGetResponses, telegramWebhookApiV1ConciergeTelegramWebhookPostData, telegramWebhookApiV1ConciergeTelegramWebhookPostErrors, telegramWebhookApiV1ConciergeTelegramWebhookPostResponses, validateContextReferenceApiV1ConciergeContextReferencesValidatePostData, validateContextReferenceApiV1ConciergeContextReferencesValidatePostErrors, validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponses, versionApiV1SystemVersionGetData, versionApiV1SystemVersionGetErrors, versionApiV1SystemVersionGetResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -92,6 +92,17 @@ export class ConciergeService {
                 'Content-Type': 'application/json',
                 ...options.headers
             }
+        });
+    }
+    
+    /**
+     * Telegram Webhook
+     */
+    public static telegramWebhookApiV1ConciergeTelegramWebhookPost<ThrowOnError extends boolean = true>(options?: Options<telegramWebhookApiV1ConciergeTelegramWebhookPostData, ThrowOnError>) {
+        return (options?.client ?? client).post<telegramWebhookApiV1ConciergeTelegramWebhookPostResponses, telegramWebhookApiV1ConciergeTelegramWebhookPostErrors, ThrowOnError>({
+            responseType: 'json',
+            url: '/api/v1/concierge/telegram/webhook',
+            ...options
         });
     }
 }

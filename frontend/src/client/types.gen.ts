@@ -49,13 +49,9 @@ export type ContextReferenceResponse = {
      */
     reference: string | null;
     /**
-     * Web Whatsapp Url
+     * Telegram Url
      */
-    web_whatsapp_url: string;
-    /**
-     * Whatsapp Url
-     */
-    whatsapp_url: string;
+    telegram_url: string;
 };
 
 /**
@@ -543,7 +539,7 @@ export type createContextReferenceApiV1ConciergeContextReferencesPostErrors = {
      */
     422: HTTPValidationError;
     /**
-     * WhatsApp, assinatura ou Catálogo indisponível.
+     * Telegram, assinatura ou Catálogo indisponível.
      */
     503: unknown;
 };
@@ -591,6 +587,45 @@ export type validateContextReferenceApiV1ConciergeContextReferencesValidatePostR
 };
 
 export type validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponse = validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponses[keyof validateContextReferenceApiV1ConciergeContextReferencesValidatePostResponses];
+
+export type telegramWebhookApiV1ConciergeTelegramWebhookPostData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/concierge/telegram/webhook';
+};
+
+export type telegramWebhookApiV1ConciergeTelegramWebhookPostErrors = {
+    /**
+     * Content-Length inválido.
+     */
+    400: unknown;
+    /**
+     * Segredo de webhook inválido.
+     */
+    401: unknown;
+    /**
+     * Atualização excede o tamanho permitido.
+     */
+    413: unknown;
+    /**
+     * Telegram ou persistência indisponível.
+     */
+    503: unknown;
+};
+
+export type telegramWebhookApiV1ConciergeTelegramWebhookPostResponses = {
+    /**
+     * Response Telegram Webhook Api V1 Concierge Telegram Webhook Post
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: string | boolean;
+    };
+};
+
+export type telegramWebhookApiV1ConciergeTelegramWebhookPostResponse = telegramWebhookApiV1ConciergeTelegramWebhookPostResponses[keyof telegramWebhookApiV1ConciergeTelegramWebhookPostResponses];
 
 export type healthApiV1HealthGetData = {
     body?: never;

@@ -15,7 +15,22 @@ compose() {
 }
 
 cleanup() {
-  compose down --volumes --remove-orphans
+  local exit_code=$?
+  if (( exit_code != 0 )); then
+    echo "Compose smoke failed; collecting service status and logs before cleanup." >&2
+    compose ps --all >&2 || true
+    compose logs --no-color >&2 || true
+  fi
+  if compose down --volumes --remove-orphans; then
+    :
+  else
+    local cleanup_exit_code=$?
+    echo "Compose smoke cleanup failed." >&2
+    if (( exit_code == 0 )); then
+      exit_code=$cleanup_exit_code
+    fi
+  fi
+  exit "$exit_code"
 }
 trap cleanup EXIT
 

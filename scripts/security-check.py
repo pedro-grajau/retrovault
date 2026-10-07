@@ -29,4 +29,4 @@ if violations:
         "Paid external API references are forbidden in CI:\n" + "\n".join(violations)
     )
 
-print("Security guard passed: no paid OpenAI, Meta or Stripe API endpoint is referenced")
+print("Security guard passed: no paid OpenAI/Stripe endpoint or Telegram API call is used in CI")

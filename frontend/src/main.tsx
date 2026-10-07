@@ -204,8 +204,8 @@ function PixelEntry({ gameId }: { gameId?: string }) {
       setEntry(nextEntry)
       setMessage(
         nextEntry.reference
-          ? "Contexto do jogo preparado. Escolha como abrir o WhatsApp."
-          : "Conversa preparada. Escolha como abrir o WhatsApp.",
+          ? "Contexto do jogo preparado. Clique em Continuar no Telegram para abrir o bot."
+          : "Conversa preparada. Clique em Continuar no Telegram para abrir o bot.",
       )
     } catch (cause) {
       const unavailable =
@@ -226,7 +226,7 @@ function PixelEntry({ gameId }: { gameId?: string }) {
   return (
     <section className="pixel-entry" aria-labelledby={headingId}>
       <div>
-        <p className="eyebrow">ATENDIMENTO NO WHATSAPP</p>
+        <p className="eyebrow">ATENDIMENTO NO TELEGRAM</p>
         <h2 id={headingId}>Converse com Pixel</h2>
         <p>
           {gameId
@@ -252,27 +252,16 @@ function PixelEntry({ gameId }: { gameId?: string }) {
         </p>
       )}
       {entry && (
-        <fieldset className="pixel-links">
-          <legend className="visually-hidden">
-            Opções para abrir a conversa
-          </legend>
+        <div className="pixel-links">
           <a
             className="button-secondary"
-            href={entry.whatsapp_url}
+            href={entry.telegram_url}
             target="_blank"
             rel="noopener noreferrer"
           >
-            Continuar no WhatsApp
+            Continuar no Telegram
           </a>
-          <a
-            className="text-link"
-            href={entry.web_whatsapp_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Usar WhatsApp Web (abre uma nova guia)
-          </a>
-        </fieldset>
+        </div>
       )}
       {error && (
         <button

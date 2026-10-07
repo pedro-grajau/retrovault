@@ -1,0 +1,21 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "event": "IncomingSessionMessage",
+  "fields": [
+    "channel",
+    "external_user_id",
+    "external_chat_id",
+    "update_id",
+    "message_id",
+    "text",
+    "sent_at",
+    "received_at",
+    "correlation_id",
+    "context_reference"
+  ],
+  "channel_values": ["telegram", "simulator"],
+  "untrusted_fields": ["text", "context_reference"],
+  "raw_webhook_payload_persisted": false
+}
