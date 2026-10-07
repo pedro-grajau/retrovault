@@ -18,6 +18,8 @@ from starlette.middleware.cors import CORSMiddleware
 from app.modules.catalog.adapters.postgres_repository import PostgresCatalogRepository
 from app.modules.catalog.api.router import (
     configure_services,
+)
+from app.modules.catalog.api.router import (
     router as catalog_router,
 )
 from app.modules.commerce.adapters.postgres_offers import PostgresOfferReader
@@ -26,9 +28,14 @@ from app.modules.concierge.adapters.postgres_sessions import (
     PostgresSessionRepository,
     SessionsUnavailable,
 )
-from app.modules.concierge.adapters.telegram_bot import TelegramBotClient, TelegramUnavailable
+from app.modules.concierge.adapters.telegram_bot import (
+    TelegramBotClient,
+    TelegramUnavailable,
+)
 from app.modules.concierge.api.router import (
     configure_services as configure_concierge_services,
+)
+from app.modules.concierge.api.router import (
     router as concierge_router,
 )
 from app.modules.concierge.domain.session import OutboxReply

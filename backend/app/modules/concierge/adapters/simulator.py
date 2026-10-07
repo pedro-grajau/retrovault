@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+from _thread import LockType
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from _thread import LockType
 from threading import Lock
 from typing import Any, Protocol
 from uuid import UUID, uuid4
