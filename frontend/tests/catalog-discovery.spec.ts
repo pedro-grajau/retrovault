@@ -694,7 +694,7 @@ test("Pixel prepara referência contextual e abre o Telegram", async ({
   await page.route(`**/api/v1/catalog/games/${gameId}/box-art`, (route) =>
     route.fulfill({ status: 404, body: "" }),
   )
-  const contextReference = `2${"A".repeat(44)}`
+  const contextReference = `2${"A".repeat(55)}`
   let body: unknown
   await page.route("**/api/v1/concierge/context-references", async (route) => {
     body = route.request().postDataJSON()
