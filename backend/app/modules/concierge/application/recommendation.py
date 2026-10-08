@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID
 
 from app.modules.catalog.application.discovery import (
@@ -344,7 +345,9 @@ class RecommendationService:
         context: object, checked_at: str, facts: list[dict[str, object]]
     ) -> None:
         if type(context) is dict and facts:
-            context["revalidation"] = {"checked_at": checked_at, "facts": facts[:3]}
+            cast(dict[str, object], context)["revalidation"] = {
+                "checked_at": checked_at, "facts": facts[:3]
+            }
 
     def _snapshot(
         self,

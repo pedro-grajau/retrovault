@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
 from uuid import uuid4
@@ -211,6 +212,38 @@ def test_immediate_outbox_redrive_persists_fresh_commerce_evidence_and_text() ->
     persisted = store._messages[(event.channel, event.update_id)]
     assert persisted["reply"] == delivery.text
     assert persisted["recommendation_context"]["revalidation"]["facts"][0]["status"] == "no_eligible_offer"
+
+
+def test_pending_replies_exclude_lost_lease_and_keep_other_replies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, saver, references, _ = setup_workflow()
+    workflow = SessionWorkflow(
+        store, references, lambda: null_context(saver),
+        intent_extraction=SequenceExtraction([
+            _intent_decision("accepted"), _intent_decision("accepted")
+        ]),
+        recommendations=GreetingRecommendations(),
+    )
+    for update_id in (801, 802):
+        workflow.handle(replace(
+            incoming(update_id, update_id, "Quero aventura", user_id=str(update_id)),
+            channel="telegram",
+        ))
+
+    original_update = store.update_outbox_recommendation
+
+    def update_with_lost_lease(update_id: int, **kwargs):  # type: ignore[no-untyped-def]
+        if update_id == 801:
+            store._messages[("telegram", update_id)]["delivery_lease_token"] = uuid4()
+        return original_update(update_id, **kwargs)
+
+    monkeypatch.setattr(store, "update_outbox_recommendation", update_with_lost_lease)
+
+    replies = workflow.claim_pending_replies()
+
+    assert [reply.update_id for reply in replies] == [802]
+    assert "Opções revalidadas" in replies[0].text
 
 
 def test_valid_contextual_start_attaches_game_to_existing_generic_session() -> None:

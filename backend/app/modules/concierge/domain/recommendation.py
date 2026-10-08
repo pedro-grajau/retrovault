@@ -284,9 +284,9 @@ def _candidate_from_dict(value: object) -> RecommendationCandidateSnapshot:
             raise ValueError("invalid_recommendation_candidate")
     offers = tuple(_offer_from_dict(item) for item in offers_raw)
     return RecommendationCandidateSnapshot(
-        game_id, title, platform, cast(str | None, genre_value), version, offers,
-        tuple(evidence_raw), tuple(matched_fields_raw),
-        tuple(sorted(matched_attributes_raw.items())),
+        game_id, title, platform, genre_value, version, offers,
+        tuple(cast(list[str], evidence_raw)), tuple(cast(list[str], matched_fields_raw)),
+        tuple(sorted(cast(dict[str, str], matched_attributes_raw).items())),
     )
 
 
@@ -325,7 +325,7 @@ def _ranked_game_from_dict(value: object) -> RankedGame:
         raise ValueError("invalid_recommendation_ranking")
     if any(type(item) is not str or len(item) > 96 for item in evidence):
         raise ValueError("invalid_recommendation_ranking")
-    return RankedGame(game_id, tuple(evidence))
+    return RankedGame(game_id, tuple(cast(list[str], evidence)))
 
 
 def _valid_revalidation(value: object) -> bool:
@@ -348,9 +348,10 @@ def _valid_revalidation(value: object) -> bool:
     for fact in facts:
         if type(fact) is not dict:
             return False
+        fact = cast(dict[str, object], fact)
         status = fact.get("status")
         try:
-            game_id = UUID(_required_string(cast(dict[str, object], fact), "game_id", 36))
+            game_id = UUID(_required_string(fact, "game_id", 36))
         except (KeyError, ValueError, TypeError):
             return False
         if game_id in seen or status not in {
@@ -365,12 +366,12 @@ def _valid_revalidation(value: object) -> bool:
             }:
                 return False
             try:
-                _required_string(cast(dict[str, object], fact), "title", 200)
-                _required_string(cast(dict[str, object], fact), "platform", 96)
+                _required_string(fact, "title", 200)
+                _required_string(fact, "platform", 96)
                 genre = fact["genre"]
                 if genre is not None and (type(genre) is not str or len(genre) > 96):
                     return False
-                _required_integer(cast(dict[str, object], fact), "version", 1)
+                _required_integer(fact, "version", 1)
                 offers = fact["offers"]
                 if type(offers) is not list or not offers:
                     return False

@@ -143,7 +143,9 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         ):
             reply = cast(str, recommendation["reply_text"])
             context = recommendation.get("context")
-            updates_context = context if isinstance(context, dict) else None
+            updates_context = (
+                cast(dict[str, object], context) if isinstance(context, dict) else None
+            )
         else:
             intent_value = state.get("prepared_intent")
             current_intent = Intent.from_dict(intent_value) or Intent()
@@ -444,7 +446,12 @@ class SessionWorkflow:
         replies = self.store.claim_pending_replies(
             now=datetime.now(UTC), limit=limit, lease_seconds=lease_seconds
         )
-        return [self._prepare_reply(reply) for reply in replies if reply is not None]
+        prepared_replies: list[OutboxReply] = []
+        for reply in replies:
+            prepared = self._prepare_reply(reply)
+            if prepared is not None:
+                prepared_replies.append(prepared)
+        return prepared_replies
 
     def _prepare_reply(self, reply: OutboxReply | None) -> OutboxReply | None:
         if reply is None or reply.recommendation_context is None:
