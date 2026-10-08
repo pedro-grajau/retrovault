@@ -1,1 +1,7 @@
-{"owner":"quality","version":1,"status":"reserved","contracts":[],"note":"Reserved for the story that defines evaluation behavior."}
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "contracts": ["intent-security.v1.json"],
+  "evaluation_policy": "offline-only-no-paid-provider-calls-in-ci"
+}

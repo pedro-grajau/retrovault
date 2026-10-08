@@ -77,6 +77,15 @@
       "idempotency": "global-key+request-hash",
       "atomicity": "projection+audit+outbox",
       "errors": ["published_game_not_found", "etag_conflict", "decision_conflict", "idempotency_key_reused"]
+    },
+    {
+      "name": "request-human",
+      "contract": "request-human.v1.json",
+      "transport": "telegram-or-simulator-message",
+      "input": "session-id+channel+update-id+correlation-id",
+      "output": "idempotent-sandbox-handoff-request",
+      "idempotency": "channel+update-id",
+      "errors": ["handoff_disabled", "handoff_unavailable"]
     }
   ]
 }

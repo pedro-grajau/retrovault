@@ -463,8 +463,22 @@ async def test_app_lifespan_redrives_pending_reply_and_marks_it_delivered(
             self.messages.append((chat_id, text))
             self.sent.set()
 
+    class RecordingAiLedger:
+        def __init__(self) -> None:
+            self.expire_calls: list[dict[str, object]] = []
+            self.purge_cutoffs: list[datetime] = []
+
+        def expire_orphans(self, **kwargs: object) -> int:
+            self.expire_calls.append(kwargs)
+            return 0
+
+        def purge_expired_metadata(self, *, before: datetime) -> int:
+            self.purge_cutoffs.append(before)
+            return 0
+
     repository = PendingRepository()
     messenger = RecordingMessenger()
+    ai_ledger = RecordingAiLedger()
     monkeypatch.setattr(app_main, "_session_repository", repository)
     monkeypatch.setattr(app_main, "_telegram_messenger", messenger)
     monkeypatch.setattr(
@@ -474,16 +488,38 @@ async def test_app_lifespan_redrives_pending_reply_and_marks_it_delivered(
     )
     monkeypatch.setattr(
         app_main,
+        "_ai_ledger_repository",
+        ai_ledger,
+    )
+    monkeypatch.setattr(
+        app_main,
+        "_handoff_repository",
+        SimpleNamespace(claim_pending_handoffs=lambda **_: []),
+    )
+    monkeypatch.setattr(
+        app_main,
         "settings",
         SimpleNamespace(
             pixel_telegram_bot_token=SecretStr("test-token"),
             pixel_telegram_retention_days=30,
+            pixel_ai_ledger_retention_days=180,
         ),
     )
+
+    async def in_process_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", in_process_to_thread)
 
     async with app_main.lifespan(FastAPI()):
         await asyncio.wait_for(messenger.sent.wait(), timeout=3)
         assert await asyncio.to_thread(repository.marked.wait, 3)
+        assert ai_ledger.expire_calls
+        assert len(ai_ledger.purge_cutoffs) == 1
+        assert ai_ledger.expire_calls[0]["limit"] == 100
+        assert abs(
+            datetime.now(UTC) - ai_ledger.purge_cutoffs[0] - timedelta(days=180)
+        ) < timedelta(seconds=2)
 
     assert messenger.messages == [("12345", "Resposta pendente")]
     assert repository.marked_updates == [reply.update_id]

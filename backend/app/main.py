@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
@@ -23,6 +23,9 @@ from app.modules.catalog.api.router import (
     router as catalog_router,
 )
 from app.modules.commerce.adapters.postgres_offers import PostgresOfferReader
+from app.modules.concierge.adapters.openai_model_gateway import OpenAIModelGateway
+from app.modules.concierge.adapters.postgres_ai_ledger import PostgresAiLedger
+from app.modules.concierge.adapters.postgres_handoffs import PostgresHandoffRepository
 from app.modules.concierge.adapters.postgres_sessions import (
     PostgresCheckpointFactory,
     PostgresSessionRepository,
@@ -38,6 +41,9 @@ from app.modules.concierge.api.router import (
 from app.modules.concierge.api.router import (
     router as concierge_router,
 )
+from app.modules.concierge.application.intent_extraction import IntentExtractionService
+from app.modules.concierge.domain.ai_ledger import AiLedgerUnavailable, AiPricing
+from app.modules.concierge.domain.handoff import HandoffNotification, HandoffUnavailable
 from app.modules.concierge.domain.session import OutboxReply
 from app.platform.config.settings import settings
 
@@ -46,9 +52,41 @@ logger = logging.getLogger(__name__)
 _database_engine = create_engine(settings.database_url, pool_pre_ping=True)
 _catalog_repository = PostgresCatalogRepository(_database_engine)
 _session_repository = PostgresSessionRepository(_database_engine)
+_ai_ledger_repository = PostgresAiLedger(_database_engine)
+_handoff_repository = PostgresHandoffRepository(_database_engine)
 _checkpoint_factory = PostgresCheckpointFactory(settings.database_url)
 _telegram_messenger = TelegramBotClient(
     settings.pixel_telegram_bot_token.get_secret_value()
+)
+_ai_pricing = AiPricing(
+    input_usd_per_million_tokens=settings.pixel_ai_input_usd_per_million_tokens,
+    output_usd_per_million_tokens=settings.pixel_ai_output_usd_per_million_tokens,
+    max_input_tokens=settings.pixel_ai_max_input_tokens,
+    max_output_tokens=settings.pixel_ai_max_output_tokens,
+    reservation_ttl_seconds=settings.pixel_ai_reservation_ttl_seconds,
+    monthly_budget_usd=settings.pixel_ai_monthly_budget_usd,
+)
+_model_gateway = (
+    OpenAIModelGateway(
+        settings.pixel_openai_api_key.get_secret_value(),
+        settings.pixel_openai_model_snapshot,
+        timeout_seconds=7.0,
+        max_output_tokens=settings.pixel_ai_max_output_tokens,
+    )
+    if (
+        settings.pixel_openai_api_key.get_secret_value()
+        and settings.pixel_openai_model_snapshot
+        and _ai_pricing.enabled
+    )
+    else None
+)
+_intent_extraction = IntentExtractionService(
+    _model_gateway,
+    _ai_ledger_repository,
+    pricing=_ai_pricing,
+    model_snapshot=settings.pixel_openai_model_snapshot,
+    configuration_version=settings.pixel_ai_configuration_version,
+    workflow_version="2.2.v1",
 )
 configure_services(
     _catalog_repository,
@@ -61,6 +99,8 @@ configure_concierge_services(
     ttl_seconds=settings.pixel_context_reference_ttl_seconds,
     session_store=_session_repository,
     checkpointer_factory=_checkpoint_factory,
+    intent_extraction_service=_intent_extraction,
+    handoff_store=_handoff_repository,
     telegram_messenger=_telegram_messenger,
     telegram_bot_token_configured=bool(
         settings.pixel_telegram_bot_token.get_secret_value()
@@ -119,6 +159,26 @@ async def _deliver_outbox_reply(reply: OutboxReply) -> None:
     )
 
 
+async def _deliver_handoff(notification: HandoffNotification) -> None:
+    try:
+        await _telegram_messenger.send_message(
+            notification.target_chat_id, notification.text
+        )
+    except TelegramUnavailable:
+        logger.warning("Concierge handoff notification delivery failed")
+        await asyncio.to_thread(
+            _handoff_repository.release_handoff,
+            notification.request_id,
+            lease_token=notification.lease_token,
+        )
+        return
+    await asyncio.to_thread(
+        _handoff_repository.mark_handoff_delivered,
+        notification.request_id,
+        lease_token=notification.lease_token,
+    )
+
+
 async def _outbox_delivery_loop() -> None:
     while True:
         try:
@@ -130,9 +190,39 @@ async def _outbox_delivery_loop() -> None:
             )
             if replies:
                 await asyncio.gather(*(_deliver_outbox_reply(reply) for reply in replies))
+            handoffs = await asyncio.to_thread(
+                _handoff_repository.claim_pending_handoffs,
+                now=datetime.now(UTC),
+                limit=20,
+                lease_seconds=30,
+            )
+            if handoffs:
+                await asyncio.gather(*(_deliver_handoff(item) for item in handoffs))
         except SessionsUnavailable:
             logger.error("Concierge outbox delivery worker failed")
+        except HandoffUnavailable:
+            logger.error("Concierge handoff outbox delivery worker failed")
         await asyncio.sleep(1)
+
+
+async def _ai_ledger_maintenance_loop() -> None:
+    last_purge: float | None = None
+    while True:
+        now = datetime.now(UTC)
+        try:
+            await asyncio.to_thread(
+                _ai_ledger_repository.expire_orphans, now=now, limit=100
+            )
+            monotonic_now = asyncio.get_running_loop().time()
+            if last_purge is None or monotonic_now - last_purge >= 86400:
+                await asyncio.to_thread(
+                    _ai_ledger_repository.purge_expired_metadata,
+                    before=now - timedelta(days=settings.pixel_ai_ledger_retention_days),
+                )
+                last_purge = monotonic_now
+        except AiLedgerUnavailable:
+            logger.error("Concierge AI ledger maintenance failed")
+        await asyncio.sleep(60)
 
 
 @asynccontextmanager
@@ -143,6 +233,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         settings.pixel_telegram_retention_days,
     )
     retention_task = asyncio.create_task(_session_retention_loop())
+    ai_ledger_task = asyncio.create_task(_ai_ledger_maintenance_loop())
     outbox_task = (
         asyncio.create_task(_outbox_delivery_loop())
         if settings.pixel_telegram_bot_token.get_secret_value()
@@ -154,6 +245,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         retention_task.cancel()
         with suppress(asyncio.CancelledError):
             await retention_task
+        ai_ledger_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ai_ledger_task
         if outbox_task is not None:
             outbox_task.cancel()
             with suppress(asyncio.CancelledError):

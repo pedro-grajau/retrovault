@@ -26,10 +26,13 @@ from app.modules.concierge.application.context_reference import (
     ContextReferencesUnavailable,
     InvalidContextReference,
 )
+from app.modules.concierge.application.handoff import HandoffService
+from app.modules.concierge.application.intent_extraction import IntentExtractionService
 from app.modules.concierge.application.session_workflow import (
     CheckpointerFactory,
     SessionWorkflow,
 )
+from app.modules.concierge.ports.handoffs import HandoffStore
 from app.modules.concierge.ports.sessions import SessionStore, TelegramMessenger
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,7 @@ _context_references: ContextReferenceService | None = None
 _telegram_bot_username = ""
 _session_store: SessionStore | None = None
 _session_workflow: SessionWorkflow | None = None
+_handoff_service: HandoffService | None = None
 _telegram_messenger: TelegramMessenger | None = None
 _telegram_updates: TelegramUpdateAdapter | None = None
 _webhook_secret = ""
@@ -62,6 +66,8 @@ def configure_services(
     ttl_seconds: int,
     session_store: SessionStore | None = None,
     checkpointer_factory: CheckpointerFactory | None = None,
+    intent_extraction_service: IntentExtractionService | None = None,
+    handoff_store: HandoffStore | None = None,
     telegram_messenger: TelegramMessenger | None = None,
     webhook_secret: str = "",
     allowed_user_ids: frozenset[int] = frozenset(),
@@ -72,18 +78,25 @@ def configure_services(
     typing_threshold_seconds: float = 3.0,
 ) -> None:
     global _context_references, _telegram_bot_username, _session_store
-    global _session_workflow, _telegram_messenger, _telegram_updates, _webhook_secret
+    global _session_workflow, _handoff_service, _telegram_messenger, _telegram_updates, _webhook_secret
     global _telegram_bot_token_configured, _allowed_user_ids
     global _webhook_max_body_bytes, _retention_days
     global _typing_threshold_seconds, _retention_checked_at
     _context_references = ContextReferenceService(catalog, secret, ttl_seconds)
     _telegram_bot_username = telegram_bot_username.removeprefix("@")
     _session_store = session_store
+    _handoff_service = HandoffService(
+        handoff_store,
+        allowed_user_ids,
+        telegram_token_configured=telegram_bot_token_configured,
+    )
     _session_workflow = (
         SessionWorkflow(
             session_store,
             _context_references,
             checkpointer_factory,
+            intent_extraction=intent_extraction_service,
+            handoff_service=_handoff_service,
             max_message_age_seconds=message_max_age_seconds,
         )
         if session_store is not None and checkpointer_factory is not None
