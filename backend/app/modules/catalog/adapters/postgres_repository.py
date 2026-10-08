@@ -177,7 +177,7 @@ class PostgresCatalogRepository:
                 or type(decoded["v"]) is not int
                 or decoded["v"] != 1
                 or type(decoded["rank"]) is not int
-                or decoded["rank"] not in (0, 1, 2)
+                or decoded["rank"] not in (0, 1, 2, 3)
                 or type(decoded["similarity"]) not in (int, float)
                 or not 0 <= decoded["similarity"] <= 1
                 or not math.isfinite(decoded["similarity"])
@@ -280,7 +280,7 @@ class PostgresCatalogRepository:
         genre: str | None = None,
         cursor_context: str | None = None,
     ) -> tuple[list[PublishedSearchHit], str | None]:
-        """Search only active published titles with an ordered, keyset cursor."""
+        """Search active published titles and editorial fields with a keyset cursor."""
         if len(query.strip()) < 2 or len(query) > 100:
             raise ValueError("invalid_search_query")
         search_context = self._search_context_hash(
@@ -333,6 +333,11 @@ class PostgresCatalogRepository:
                        g.updated_at AS verified_at, g.cover_hash,
                        m.content_type, m.attribution,
                        catalog.normalize_title(g.title) AS normalized_title,
+                       catalog.normalize_title(coalesce(g.editorial->'attributes'->>'genre', '')) AS normalized_genre,
+                       catalog.normalize_title(coalesce(g.editorial->'attributes'->>'description', '')) AS normalized_description,
+                       catalog.normalize_title(coalesce(g.editorial->'attributes'->>'developer', '')) AS normalized_developer,
+                       catalog.normalize_title(coalesce(g.editorial->'attributes'->>'publisher', '')) AS normalized_publisher,
+                       catalog.normalize_title(coalesce(g.editorial->'attributes'->>'edition', '')) AS normalized_edition,
                        search_input.normalized_query
                 FROM catalog.published_games g
                 JOIN catalog.published_media m ON m.content_hash = g.cover_hash
@@ -354,16 +359,69 @@ class PostgresCatalogRepository:
                                 AND word_similarity(normalized_query, normalized_title) >= 0.30)
                         )
                     )
+                    OR strpos(normalized_genre, normalized_query) > 0
+                    OR strpos(normalized_description, normalized_query) > 0
+                    OR strpos(normalized_developer, normalized_query) > 0
+                    OR strpos(normalized_publisher, normalized_query) > 0
+                    OR strpos(normalized_edition, normalized_query) > 0
+                    OR to_tsvector('simple', concat_ws(' ', normalized_genre,
+                        normalized_description, normalized_developer,
+                        normalized_publisher, normalized_edition))
+                       @@ plainto_tsquery('simple', normalized_query)
                 )
             ), ranked AS (
                 SELECT matched.*,
+                       ARRAY_REMOVE(ARRAY[
+                           CASE WHEN strpos(normalized_title, normalized_query) > 0
+                                  OR to_tsvector('simple', normalized_title)
+                                     @@ plainto_tsquery('simple', normalized_query)
+                                  OR (
+                                      length(normalized_query) >= 4
+                                      AND (
+                                          (normalized_title % normalized_query
+                                           AND similarity(normalized_title, normalized_query) >= 0.30)
+                                          OR (normalized_query <% normalized_title
+                                              AND word_similarity(normalized_query, normalized_title) >= 0.30)
+                                      )
+                                  )
+                                THEN 'title' END,
+                           CASE WHEN strpos(normalized_genre, normalized_query) > 0
+                                  OR to_tsvector('simple', normalized_genre)
+                                     @@ plainto_tsquery('simple', normalized_query)
+                                THEN 'genre' END,
+                           CASE WHEN strpos(normalized_description, normalized_query) > 0
+                                  OR to_tsvector('simple', normalized_description)
+                                     @@ plainto_tsquery('simple', normalized_query)
+                                THEN 'description' END,
+                           CASE WHEN strpos(normalized_developer, normalized_query) > 0
+                                  OR to_tsvector('simple', normalized_developer)
+                                     @@ plainto_tsquery('simple', normalized_query)
+                                THEN 'developer' END,
+                           CASE WHEN strpos(normalized_publisher, normalized_query) > 0
+                                  OR to_tsvector('simple', normalized_publisher)
+                                     @@ plainto_tsquery('simple', normalized_query)
+                                THEN 'publisher' END,
+                           CASE WHEN strpos(normalized_edition, normalized_query) > 0
+                                  OR to_tsvector('simple', normalized_edition)
+                                     @@ plainto_tsquery('simple', normalized_query)
+                                THEN 'edition' END
+                       ]::text[], NULL) AS matched_fields,
                        CASE
                            WHEN normalized_title = normalized_query THEN 0
                            WHEN left(normalized_title, length(normalized_query)) = normalized_query THEN 1
                            WHEN strpos(normalized_title, normalized_query) > 0
                              OR to_tsvector('simple', normalized_title)
                                 @@ plainto_tsquery('simple', normalized_query) THEN 1
-                           ELSE 2
+                           WHEN strpos(normalized_genre, normalized_query) > 0
+                             OR strpos(normalized_description, normalized_query) > 0
+                             OR strpos(normalized_developer, normalized_query) > 0
+                             OR strpos(normalized_publisher, normalized_query) > 0
+                             OR strpos(normalized_edition, normalized_query) > 0
+                             OR to_tsvector('simple', concat_ws(' ', normalized_genre,
+                                normalized_description, normalized_developer,
+                                normalized_publisher, normalized_edition))
+                                @@ plainto_tsquery('simple', normalized_query) THEN 2
+                           ELSE 3
                        END AS match_rank,
                        round(
                            greatest(
@@ -399,6 +457,7 @@ class PostgresCatalogRepository:
                     game_id=row["id"],
                     search_context=search_context,
                 ),
+                matched_fields=tuple(row["matched_fields"]),
             )
             for row in page_rows
         ]

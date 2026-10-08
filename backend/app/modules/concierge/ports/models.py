@@ -21,6 +21,12 @@ class ModelExtraction:
     usage: ModelUsage
 
 
+@dataclass(frozen=True)
+class ModelRanking:
+    output_json: str
+    usage: ModelUsage
+
+
 class ModelCallFailure(RuntimeError):
     def __init__(self, *, conclusive: bool) -> None:
         super().__init__("model_call_failed")
@@ -39,3 +45,15 @@ class ModelGateway(Protocol):
         *,
         correlation_id: UUID,
     ) -> ModelExtraction: ...
+
+    def ranking_input_token_upper_bound(
+        self, intent: Intent, candidates: list[dict[str, object]]
+    ) -> int: ...
+
+    def rank_recommendations(
+        self,
+        intent: Intent,
+        candidates: list[dict[str, object]],
+        *,
+        correlation_id: UUID,
+    ) -> ModelRanking: ...

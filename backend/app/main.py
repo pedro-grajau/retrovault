@@ -22,6 +22,7 @@ from app.modules.catalog.api.router import (
 from app.modules.catalog.api.router import (
     router as catalog_router,
 )
+from app.modules.catalog.application.discovery import PublicDiscovery
 from app.modules.commerce.adapters.postgres_offers import PostgresOfferReader
 from app.modules.concierge.adapters.openai_model_gateway import OpenAIModelGateway
 from app.modules.concierge.adapters.postgres_ai_ledger import PostgresAiLedger
@@ -42,6 +43,7 @@ from app.modules.concierge.api.router import (
     router as concierge_router,
 )
 from app.modules.concierge.application.intent_extraction import IntentExtractionService
+from app.modules.concierge.application.recommendation import RecommendationService
 from app.modules.concierge.domain.ai_ledger import AiLedgerUnavailable, AiPricing
 from app.modules.concierge.domain.handoff import HandoffNotification, HandoffUnavailable
 from app.modules.concierge.domain.session import OutboxReply
@@ -52,6 +54,8 @@ logger = logging.getLogger(__name__)
 _database_engine = create_engine(settings.database_url, pool_pre_ping=True)
 _catalog_repository = PostgresCatalogRepository(_database_engine)
 _session_repository = PostgresSessionRepository(_database_engine)
+_offer_reader = PostgresOfferReader(_database_engine)
+_public_discovery = PublicDiscovery(_catalog_repository, _offer_reader)
 _ai_ledger_repository = PostgresAiLedger(_database_engine)
 _handoff_repository = PostgresHandoffRepository(_database_engine)
 _checkpoint_factory = PostgresCheckpointFactory(settings.database_url)
@@ -86,11 +90,21 @@ _intent_extraction = IntentExtractionService(
     pricing=_ai_pricing,
     model_snapshot=settings.pixel_openai_model_snapshot,
     configuration_version=settings.pixel_ai_configuration_version,
-    workflow_version="2.2.v1",
+    workflow_version="2.3.v1",
+)
+_recommendation_service = RecommendationService(
+    _model_gateway,
+    _ai_ledger_repository,
+    _public_discovery,
+    pricing=_ai_pricing,
+    model_snapshot=settings.pixel_openai_model_snapshot,
+    configuration_version=settings.pixel_ai_configuration_version,
+    workflow_version="2.3.v1",
+    public_site_url=settings.pixel_public_site_url,
 )
 configure_services(
     _catalog_repository,
-    PostgresOfferReader(_database_engine),
+    _offer_reader,
 )
 configure_concierge_services(
     _catalog_repository,
@@ -100,6 +114,7 @@ configure_concierge_services(
     session_store=_session_repository,
     checkpointer_factory=_checkpoint_factory,
     intent_extraction_service=_intent_extraction,
+    recommendation_service=_recommendation_service,
     handoff_store=_handoff_repository,
     telegram_messenger=_telegram_messenger,
     telegram_bot_token_configured=bool(
@@ -140,8 +155,30 @@ async def _session_retention_loop() -> None:
 
 
 async def _deliver_outbox_reply(reply: OutboxReply) -> None:
+    text = reply.text
+    if reply.recommendation_context is not None:
+        try:
+            text = await asyncio.to_thread(
+                _recommendation_service.revalidate_and_compose,
+                reply.recommendation_context,
+            )
+        except Exception:
+            text = (
+                "Não consegui confirmar opções comerciais agora. Você pode "
+                "pesquisar o catálogo ou falar com uma pessoa usando /humano."
+            )
+        persisted = await asyncio.to_thread(
+            _session_repository.update_outbox_recommendation,
+            reply.update_id,
+            channel=reply.channel,
+            lease_token=reply.lease_token,
+            reply_text=text,
+            recommendation_context=reply.recommendation_context,
+        )
+        if not persisted:
+            return
     try:
-        await _telegram_messenger.send_message(reply.chat_id, reply.text)
+        await _telegram_messenger.send_message(reply.chat_id, text)
     except TelegramUnavailable:
         logger.warning("Concierge outbox delivery failed for update %s", reply.update_id)
         await asyncio.to_thread(

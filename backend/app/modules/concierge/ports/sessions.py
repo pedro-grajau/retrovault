@@ -49,6 +49,7 @@ class SessionStore(Protocol):
         processing_lease_token: UUID,
         reply_text: str,
         workflow_version: str,
+        recommendation_context: dict[str, object] | None = None,
     ) -> None: ...
 
     def claim_reply(
@@ -67,6 +68,16 @@ class SessionStore(Protocol):
         limit: int = 20,
         lease_seconds: int = 30,
     ) -> list[OutboxReply]: ...
+
+    def update_outbox_recommendation(
+        self,
+        update_id: int,
+        *,
+        channel: str,
+        lease_token: UUID,
+        reply_text: str,
+        recommendation_context: dict[str, object],
+    ) -> bool: ...
 
     def mark_reply_delivered(
         self, update_id: int, *, channel: str, lease_token: UUID

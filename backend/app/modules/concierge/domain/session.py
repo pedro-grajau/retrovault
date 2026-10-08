@@ -44,6 +44,7 @@ class OutboxReply:
     chat_id: str
     text: str
     lease_token: UUID
+    recommendation_context: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)

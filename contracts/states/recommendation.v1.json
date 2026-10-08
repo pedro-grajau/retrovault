@@ -1,0 +1,33 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "state": "recommendation-plan",
+  "version_key": "recommendation_version+source_update_id",
+  "maximum_candidates": 20,
+  "maximum_recommendations": 3,
+  "greeting_required": {"type": "boolean", "persisted_for_delivery_recomposition": true},
+  "model_output": {
+    "fields": ["game_id", "evidence"],
+    "free_text_allowed": false,
+    "ids_must_be_candidates": true,
+    "evidence_must_be_candidate_allowlist": true,
+    "duplicate_ids_invalidate_entire_ranking": true
+  },
+  "persisted_evidence": [
+    "intent",
+    "candidate_ids",
+    "catalog_attributes",
+    "commerce_facts",
+    "ranking",
+    "revalidated_facts",
+    "prompt_version",
+    "workflow_version",
+    "configuration_version",
+    "model_snapshot",
+    "correlation_id"
+  ],
+  "raw_message_retained": false,
+  "pii_retained": false,
+  "detail_link": "PIXEL_PUBLIC_SITE_URL/games/{game_id}"
+}

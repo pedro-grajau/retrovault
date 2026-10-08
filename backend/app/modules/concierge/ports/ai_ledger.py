@@ -7,13 +7,14 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.concierge.domain.ai_ledger import ReservationGrant
+from app.modules.concierge.domain.ai_ledger import AiOperation, ReservationGrant
 
 
 class AiLedger(Protocol):
     def reserve(
         self,
         *,
+        operation: AiOperation = "intent_extraction",
         session_id: UUID,
         channel: str,
         update_id: int,

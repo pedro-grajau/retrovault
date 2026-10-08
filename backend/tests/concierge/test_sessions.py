@@ -14,8 +14,11 @@ from app.modules.concierge.adapters.simulator import (
     SessionSimulator,
 )
 from app.modules.concierge.application.context_reference import ContextReferenceService
+from app.modules.concierge.application.intent_extraction import IntentDecision
 from app.modules.concierge.application.session_workflow import SessionWorkflow
+from app.modules.concierge.domain.intent import Intent, IntentProvenance
 from app.modules.concierge.domain.session import IncomingMessage
+from app.modules.concierge.ports.recommendations import RecommendationOutcome
 
 
 class Catalog:
@@ -77,7 +80,7 @@ def test_session_simulator_uses_same_versioned_workflow_and_persists_context() -
     assert session["context_game_id"] == game_id
     assert "Sandbox" in result.reply_text
     assert "game_id" not in result.reply_text
-    assert store._messages[("simulator", 1)]["workflow_version"] == "2.2.v1"
+    assert store._messages[("simulator", 1)]["workflow_version"] == "2.3.v1"
 
 
 @pytest.mark.parametrize("text", ["", "x" * 4097, "nul\x00byte", "bell\x07"])
@@ -103,6 +106,111 @@ def test_checkpoint_resumes_session_without_repeating_initial_greeting() -> None
     assert "Oi! Sou Pixel" in first.reply_text
     assert "Recebi sua mensagem" in second.reply_text
     assert len(store._sessions) == 1
+
+
+class SequenceExtraction:
+    def __init__(self, decisions):  # type: ignore[no-untyped-def]
+        self.decisions = iter(decisions)
+
+    def extract(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return next(self.decisions)
+
+
+class GreetingRecommendations:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.commerce_available = True
+
+    def recommend(self, intent, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return RecommendationOutcome(
+            "accepted", "Opções encontradas", {"greeting_required": False, "facts": []}
+        )
+
+    def revalidate_and_compose(self, context):  # type: ignore[no-untyped-def]
+        status = "eligible" if self.commerce_available else "no_eligible_offer"
+        context["revalidation"] = {"facts": [{"status": status}]}
+        if not self.commerce_available:
+            return "Não consegui confirmar opções comerciais agora. Você pode pesquisar o catálogo ou falar com uma pessoa usando /humano."
+        prefix = "Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de demonstração acontece no Sandbox. " if context["greeting_required"] else ""
+        return prefix + "Opções revalidadas com fatos comerciais atuais."
+
+
+def _intent_decision(status: str, clarification: str = "none") -> IntentDecision:
+    return IntentDecision(
+        status, Intent(genre="Adventure"), clarification,
+        IntentProvenance(
+            intent_version="intent.v2", prompt_version="intent-extraction.v2",
+            workflow_version="2.3.v1", configuration_version="test",
+            source_update_id=1, correlation_id=uuid4(),
+            safety_classification="normal",
+        ),
+    )  # type: ignore[arg-type]
+
+
+def test_clarification_after_recommendation_clears_prepared_outbox_context() -> None:
+    store, saver, references, _ = setup_workflow()
+    recommendations = GreetingRecommendations()
+    extraction = SequenceExtraction([
+        _intent_decision("accepted"), _intent_decision("accepted", "platform")
+    ])
+    workflow = SessionWorkflow(
+        store, references, lambda: null_context(saver),
+        intent_extraction=extraction, recommendations=recommendations,
+    )
+    now = datetime.now(UTC)
+    first = workflow.handle(incoming(501, 501, "Quero aventura", sent_at=now))
+    assert "Oi! Sou Pixel" in first.reply_text
+    delivery = workflow.claim_reply(501, channel="simulator")
+    assert delivery is not None
+    assert "Oi! Sou Pixel" in delivery.text
+    assert "Sandbox" in delivery.text
+    assert store._messages[("simulator", 501)]["reply"] == delivery.text
+
+    clarified = workflow.handle(incoming(
+        502, 502, "Pode ser qualquer plataforma", sent_at=now + timedelta(seconds=1)
+    ))
+    assert "Em qual plataforma" in clarified.reply_text
+    assert recommendations.calls == 1
+    assert store._messages[("simulator", 502)]["recommendation_context"] is None
+
+
+def test_fallback_and_handoff_after_recommendation_clear_old_context() -> None:
+    store, saver, references, _ = setup_workflow()
+    recommendations = GreetingRecommendations()
+    workflow = SessionWorkflow(
+        store, references, lambda: null_context(saver),
+        intent_extraction=SequenceExtraction([
+            _intent_decision("accepted"), _intent_decision("fallback")
+        ]), recommendations=recommendations,
+    )
+    now = datetime.now(UTC)
+    workflow.handle(incoming(601, 601, "Quero aventura", sent_at=now))
+    fallback = workflow.handle(incoming(602, 602, "mensagem ilegível", sent_at=now + timedelta(seconds=1)))
+    handoff = workflow.handle(incoming(603, 603, "/humano", sent_at=now + timedelta(seconds=2)))
+    assert "não consegui interpretá-la" in fallback.reply_text.casefold()
+    assert "encaminhamento humano" in handoff.reply_text.casefold()
+    assert store._messages[("simulator", 602)]["recommendation_context"] is None
+    assert store._messages[("simulator", 603)]["recommendation_context"] is None
+
+
+def test_immediate_outbox_redrive_persists_fresh_commerce_evidence_and_text() -> None:
+    store, saver, references, _ = setup_workflow()
+    recommendations = GreetingRecommendations()
+    workflow = SessionWorkflow(
+        store, references, lambda: null_context(saver),
+        intent_extraction=SequenceExtraction([_intent_decision("accepted")]),
+        recommendations=recommendations,
+    )
+    event = incoming(701, 701, "Quero aventura")
+    workflow.handle(event)
+    recommendations.commerce_available = False
+    delivery = workflow.claim_reply(event.update_id, channel=event.channel)
+    assert delivery is not None
+    assert "não consegui confirmar opções comerciais" in delivery.text.casefold()
+    persisted = store._messages[(event.channel, event.update_id)]
+    assert persisted["reply"] == delivery.text
+    assert persisted["recommendation_context"]["revalidation"]["facts"][0]["status"] == "no_eligible_offer"
 
 
 def test_valid_contextual_start_attaches_game_to_existing_generic_session() -> None:

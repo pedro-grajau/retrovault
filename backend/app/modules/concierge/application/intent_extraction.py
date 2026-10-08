@@ -100,6 +100,7 @@ class IntentExtractionService:
             return self._fallback(prior, update_id, correlation_id, safety)
         try:
             grant = self.ledger.reserve(
+                operation="intent_extraction",
                 session_id=session_id,
                 channel=channel,
                 update_id=update_id,

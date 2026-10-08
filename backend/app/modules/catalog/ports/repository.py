@@ -17,6 +17,7 @@ class PublishedSearchHit:
 
     game: PublishedGame
     cursor_after: str
+    matched_fields: tuple[str, ...] = ("title",)
 
 
 class PublishedCatalog(Protocol):

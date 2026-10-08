@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -23,7 +24,7 @@ from app.modules.concierge.domain.session import (
     OutboxReply,
 )
 
-WORKFLOW_VERSION = "2.2.v1"
+WORKFLOW_VERSION = "2.3.v1"
 
 
 class SessionsUnavailable(RuntimeError):
@@ -462,6 +463,7 @@ class PostgresSessionRepository:
         processing_lease_token: UUID,
         reply_text: str,
         workflow_version: str,
+        recommendation_context: dict[str, object] | None = None,
     ) -> None:
         try:
             with self.engine.begin() as connection:
@@ -500,10 +502,12 @@ class PostgresSessionRepository:
                     text("""
                         INSERT INTO concierge.outbox (
                             id, session_id, channel, external_update_id,
-                            source_message_id, external_chat_id, text, status, created_at
+                            source_message_id, external_chat_id, text, status,
+                            created_at, recommendation_context
                         ) VALUES (
                             :id, :session_id, :channel, :update_id,
-                            :source_message_id, :chat_id, :text, 'pending', now()
+                            :source_message_id, :chat_id, :text, 'pending', now(),
+                            CAST(:recommendation_context AS jsonb)
                         ) ON CONFLICT (channel, external_update_id) DO NOTHING
                     """),
                     {
@@ -514,6 +518,11 @@ class PostgresSessionRepository:
                         "source_message_id": row["source_message_id"],
                         "chat_id": row["external_chat_id"],
                         "text": reply_text,
+                        "recommendation_context": (
+                            json.dumps(recommendation_context, ensure_ascii=False)
+                            if recommendation_context is not None
+                            else None
+                        ),
                     },
                 )
         except SQLAlchemyError as exc:
@@ -551,7 +560,8 @@ class PostgresSessionRepository:
                         WHERE outbox.id = ready.id
                         RETURNING outbox.id, outbox.channel,
                                   outbox.external_update_id, outbox.external_chat_id,
-                                  outbox.text, outbox.lease_token
+                                  outbox.text, outbox.lease_token,
+                                  outbox.recommendation_context
                     """),
                     {
                         "channel": channel,
@@ -598,7 +608,8 @@ class PostgresSessionRepository:
                         WHERE outbox.id = ready.id
                         RETURNING outbox.id, outbox.channel,
                                   outbox.external_update_id, outbox.external_chat_id,
-                                  outbox.text, outbox.lease_token
+                                  outbox.text, outbox.lease_token,
+                                  outbox.recommendation_context
                     """),
                     {
                         "now": now,
@@ -611,6 +622,39 @@ class PostgresSessionRepository:
         except SQLAlchemyError as exc:
             raise SessionsUnavailable("concierge_session_storage_unavailable") from exc
 
+    def update_outbox_recommendation(
+        self,
+        update_id: int,
+        *,
+        channel: str,
+        lease_token: UUID,
+        reply_text: str,
+        recommendation_context: dict[str, object],
+    ) -> bool:
+        try:
+            with self.engine.begin() as connection:
+                result = connection.execute(
+                    text("""
+                        UPDATE concierge.outbox
+                        SET text = :text,
+                            recommendation_context = CAST(:recommendation_context AS jsonb)
+                        WHERE channel = :channel AND external_update_id = :update_id
+                          AND status = 'delivering' AND lease_token = :lease_token
+                    """),
+                    {
+                        "text": reply_text,
+                        "recommendation_context": json.dumps(
+                            recommendation_context, ensure_ascii=False
+                        ),
+                        "channel": channel,
+                        "update_id": update_id,
+                        "lease_token": lease_token,
+                    },
+                )
+                return (result.rowcount or 0) == 1
+        except SQLAlchemyError as exc:
+            raise SessionsUnavailable("concierge_session_storage_unavailable") from exc
+
     @staticmethod
     def _outbox_reply(row: RowMapping) -> OutboxReply:
         return OutboxReply(
@@ -620,6 +664,7 @@ class PostgresSessionRepository:
             chat_id=row["external_chat_id"],
             text=row["text"],
             lease_token=row["lease_token"],
+            recommendation_context=row.get("recommendation_context"),
         )
 
     def mark_reply_delivered(

@@ -1,0 +1,34 @@
+{
+  "owner": "concierge",
+  "version": 2,
+  "status": "active",
+  "state": "intent",
+  "version_key": "intent_version+source_update_id",
+  "workflow_version": "2.3.v1",
+  "prompt_version": "intent-extraction.v2",
+  "fields": {
+    "platform": {"type": ["string", "null"], "max_length": 48},
+    "genre": {"type": ["string", "null"], "max_length": 64},
+    "style": {"type": ["string", "null"], "max_length": 96},
+    "players": {"type": ["integer", "null"], "minimum": 1, "maximum": 12},
+    "price_min_brl_cents": {"type": ["integer", "null"], "minimum": 0, "maximum": 100000000},
+    "price_max_brl_cents": {"type": ["integer", "null"], "minimum": 0, "maximum": 100000000},
+    "constraints": {"type": "array", "max_items": 5, "item_max_length": 120},
+    "mode": {"type": ["string", "null"], "enum": ["purchase", "rental", null], "explicit_only": true}
+  },
+  "extraction_signals": {
+    "mode_cleared": {"type": "boolean", "transient": true, "persisted": false, "true_clears_previous_mode": true}
+  },
+  "additional_properties": false,
+  "provenance": [
+    "intent_version",
+    "prompt_version",
+    "workflow_version",
+    "configuration_version",
+    "source_update_id",
+    "correlation_id",
+    "safety_classification"
+  ],
+  "raw_message_retained": false,
+  "legacy_checkpoint": {"intent.v1": {"mode": null}}
+}

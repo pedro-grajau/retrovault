@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.concierge.domain.ai_ledger import (
     AiLedgerUnavailable,
+    AiOperation,
     ReservationGrant,
 )
 from app.modules.concierge.ports.ai_ledger import AiLedger
@@ -24,6 +25,7 @@ class PostgresAiLedger(AiLedger):
     def reserve(
         self,
         *,
+        operation: AiOperation = "intent_extraction",
         session_id: UUID,
         channel: str,
         update_id: int,
@@ -41,6 +43,8 @@ class PostgresAiLedger(AiLedger):
         expires_at: datetime,
     ) -> ReservationGrant:
         if (
+            operation not in {"intent_extraction", "recommendation_ranking"}
+            or
             reserved_cost_usd <= 0
             or monthly_budget_usd <= 0
             or monthly_budget_usd > Decimal("25.00")
@@ -76,9 +80,14 @@ class PostgresAiLedger(AiLedger):
                         SELECT id, status
                         FROM concierge.ai_ledger_reservations
                         WHERE channel = :channel AND external_update_id = :update_id
+                          AND operation = :operation
                         FOR UPDATE
                     """),
-                    {"channel": channel, "update_id": update_id},
+                    {
+                        "channel": channel,
+                        "update_id": update_id,
+                        "operation": operation,
+                    },
                 ).mappings().first()
                 if existing is not None:
                     return ReservationGrant(
@@ -111,6 +120,7 @@ class PostgresAiLedger(AiLedger):
                     text("""
                         INSERT INTO concierge.ai_ledger_reservations (
                             id, session_id, channel, external_update_id,
+                            operation,
                             period_start, correlation_id, model_snapshot,
                             prompt_version, workflow_version, configuration_version,
                             input_token_limit, output_token_limit,
@@ -118,6 +128,7 @@ class PostgresAiLedger(AiLedger):
                             expires_at
                         ) VALUES (
                             :id, :session_id, :channel, :update_id,
+                            :operation,
                             :period_start, :correlation_id, :model_snapshot,
                             :prompt_version, :workflow_version, :configuration_version,
                             :input_token_limit, :output_token_limit,
@@ -130,6 +141,7 @@ class PostgresAiLedger(AiLedger):
                         "session_id": session_id,
                         "channel": channel,
                         "update_id": update_id,
+                        "operation": operation,
                         "period_start": period_start,
                         "correlation_id": correlation_id,
                         "model_snapshot": model_snapshot,

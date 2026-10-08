@@ -26,6 +26,25 @@ class DiscoveryPage:
     commerce_status: Literal["available", "unavailable"]
 
 
+@dataclass(frozen=True)
+class RecommendationCriteria:
+    """Allowlisted search and Commerce filters for a Concierge recommendation."""
+
+    query: str | None = None
+    platform: str | None = None
+    genre: str | None = None
+    mode: Literal["purchase", "rental"] | None = None
+    price_min_brl_cents: int | None = None
+    price_max_brl_cents: int | None = None
+
+
+@dataclass(frozen=True)
+class DiscoveryCandidate:
+    game: PublishedGame
+    offers: tuple[Offer, ...]
+    matched_fields: tuple[str, ...] = ()
+
+
 class CommerceUnavailable(Exception):
     """Commerce facts could not be read, so an availability filter cannot run."""
 
@@ -41,6 +60,144 @@ class PublicDiscovery:
             return self.commerce.list_offers([game_id]).get(game_id, [])
         except CommerceReadUnavailable as exc:
             raise CommerceUnavailable from exc
+
+    def recommend_candidates(
+        self, criteria: RecommendationCriteria
+    ) -> list[DiscoveryCandidate]:
+        """Return at most twenty active, Commerce-backed, eligible candidates."""
+        if (
+            criteria.price_min_brl_cents is not None
+            and criteria.price_max_brl_cents is not None
+            and criteria.price_min_brl_cents > criteria.price_max_brl_cents
+        ):
+            raise ValueError("invalid_price_range")
+
+        query = criteria.query.strip() if criteria.query else None
+        if query is not None and (len(query) < 2 or len(query) > 100):
+            query = None
+
+        text_eligible: list[DiscoveryCandidate] = []
+        seen: set[UUID] = set()
+        scanned = 0
+        cursor: str | None = None
+        if query:
+            while scanned < 500 and len(text_eligible) < 20:
+                hits, cursor = self.catalog.search_games(
+                    query=query,
+                    limit=min(100, 500 - scanned),
+                    cursor=cursor,
+                    platform=criteria.platform,
+                    genre=criteria.genre,
+                )
+                if not hits:
+                    break
+                scanned += len(hits)
+                eligible_by_id = self._eligible_offers(
+                    [hit.game for hit in hits], criteria
+                )
+                for hit in hits:
+                    offers = eligible_by_id.get(hit.game.id)
+                    seen.add(hit.game.id)
+                    if offers:
+                        text_eligible.append(
+                            DiscoveryCandidate(hit.game, offers, hit.matched_fields)
+                        )
+                        if len(text_eligible) == 20:
+                            break
+                if cursor is None:
+                    break
+
+        has_structured_filter = bool(
+            criteria.platform
+            or criteria.genre
+            or criteria.mode
+            or criteria.price_min_brl_cents is not None
+            or criteria.price_max_brl_cents is not None
+        )
+        if len(text_eligible) == 20 or (query and not has_structured_filter):
+            return text_eligible[:20]
+
+        # Merge the text matches with a bounded structured scan. Commerce
+        # eligibility is checked before deterministic fact-based ordering and
+        # before the twenty-candidate cap.
+        structured: list[DiscoveryCandidate] = []
+        cursor = None
+        scanned = 0
+        while scanned < 500:
+            games, cursor = self.catalog.list_games(
+                limit=min(100, 500 - scanned),
+                cursor=cursor,
+                platform=criteria.platform,
+                genre=criteria.genre,
+            )
+            if not games:
+                break
+            scanned += len(games)
+            eligible_by_id = self._eligible_offers(games, criteria)
+            for game in games:
+                if game.id in seen:
+                    continue
+                offers = eligible_by_id.get(game.id)
+                if offers:
+                    structured.append(DiscoveryCandidate(game, offers))
+            if cursor is None:
+                break
+
+        structured.sort(key=self._recommendation_order)
+        remaining = max(0, 20 - len(text_eligible))
+        return [*text_eligible, *structured[:remaining]]
+
+    def _eligible_offers(
+        self,
+        games: list[PublishedGame],
+        criteria: RecommendationCriteria,
+    ) -> dict[UUID, tuple[Offer, ...]]:
+        eligible: dict[UUID, tuple[Offer, ...]] = {}
+        for offset in range(0, len(games), 100):
+            page = games[offset : offset + 100]
+            try:
+                offers_by_game = self.commerce.list_offers([game.id for game in page])
+            except CommerceReadUnavailable as exc:
+                raise CommerceUnavailable from exc
+            for game in page:
+                offers = tuple(
+                    sorted(
+                        (
+                            offer
+                            for offer in offers_by_game.get(game.id, [])
+                            if offer.available_units > 0
+                            and (criteria.mode is None or offer.mode == criteria.mode)
+                            and (
+                                criteria.price_min_brl_cents is None
+                                or offer.price_minor >= criteria.price_min_brl_cents
+                            )
+                            and (
+                                criteria.price_max_brl_cents is None
+                                or offer.price_minor <= criteria.price_max_brl_cents
+                            )
+                        ),
+                        key=lambda offer: (
+                            offer.demo_rank,
+                            offer.price_minor,
+                            offer.mode,
+                            str(offer.id),
+                        ),
+                    )
+                )
+                if offers:
+                    eligible[game.id] = offers
+        return eligible
+
+    @staticmethod
+    def _recommendation_order(candidate: DiscoveryCandidate) -> tuple[object, ...]:
+        return (
+            min((offer.demo_rank for offer in candidate.offers), default=2**31),
+            -max((offer.available_units for offer in candidate.offers), default=0),
+            min((offer.price_minor for offer in candidate.offers), default=2**63),
+            candidate.game.title.casefold(),
+            candidate.game.platform.casefold(),
+            str(candidate.game.id),
+        )
 
     @staticmethod
     def _is_available(offers: list[Offer]) -> bool:
