@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 LEDGER_TIMEZONE = ZoneInfo("America/Fortaleza")
 MONTHLY_BUDGET_USD = Decimal("25.00")
 AiReservationStatus = Literal["reserved", "posted", "released", "expired"]
+AiOperation = Literal["intent_extraction", "recommendation_ranking"]
 
 
 class AiLedgerUnavailable(RuntimeError):

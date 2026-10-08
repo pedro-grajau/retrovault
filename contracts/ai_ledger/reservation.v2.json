@@ -1,0 +1,31 @@
+{
+  "owner": "concierge",
+  "version": 2,
+  "status": "active",
+  "record": "ai-call-reservation",
+  "states": ["reserved", "posted", "released", "expired"],
+  "operations": ["intent_extraction", "recommendation_ranking"],
+  "required": [
+    "id",
+    "session_id",
+    "channel",
+    "external_update_id",
+    "operation",
+    "period_start",
+    "correlation_id",
+    "model_snapshot",
+    "prompt_version",
+    "workflow_version",
+    "configuration_version",
+    "input_token_limit",
+    "output_token_limit",
+    "reserved_cost_usd",
+    "status",
+    "created_at",
+    "expires_at"
+  ],
+  "optional_usage": ["actual_input_tokens", "actual_output_tokens", "actual_cost_usd"],
+  "unique_key": ["channel", "external_update_id", "operation"],
+  "monthly_budget_usd_maximum": 25,
+  "stores_raw_text": false
+}

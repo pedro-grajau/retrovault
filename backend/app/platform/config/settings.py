@@ -2,6 +2,7 @@ import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +42,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("PIXEL_OPENAI_API_KEY", "OPENAI_API_KEY"),
     )
     pixel_openai_model_snapshot: str = ""
+    pixel_public_site_url: str = ""
     pixel_ai_configuration_version: str = "intent-config.v1"
     pixel_ai_input_usd_per_million_tokens: Decimal = Field(
         default=Decimal("0"), ge=0, le=10000
@@ -157,6 +159,29 @@ class Settings(BaseSettings):
                     "PIXEL_OPENAI_MODEL_SNAPSHOT must contain a valid calendar date"
                 ) from exc
         return snapshot
+
+    @field_validator("pixel_public_site_url")
+    @classmethod
+    def public_site_url_is_valid(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if not value:
+            return ""
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("PIXEL_PUBLIC_SITE_URL is invalid") from exc
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("PIXEL_PUBLIC_SITE_URL is invalid")
+        return value
 
     @field_validator("pixel_ai_configuration_version")
     @classmethod

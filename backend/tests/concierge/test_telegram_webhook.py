@@ -523,3 +523,111 @@ async def test_app_lifespan_redrives_pending_reply_and_marks_it_delivered(
 
     assert messenger.messages == [("12345", "Resposta pendente")]
     assert repository.marked_updates == [reply.update_id]
+
+
+def test_background_redrive_sends_and_persists_fresh_commerce_result(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app import main as app_main
+
+    context: dict[str, object] = {"saved_offer": "offer-1"}
+    reply = OutboxReply(
+        id=uuid4(), channel="telegram", update_id=9902, chat_id="12345",
+        text="Resposta antiga", lease_token=uuid4(), recommendation_context=context,
+    )
+
+    class Repository:
+        saved_text: str | None = None
+        saved_context: dict[str, object] | None = None
+
+        def update_outbox_recommendation(self, update_id, *, channel, lease_token, reply_text, recommendation_context):  # type: ignore[no-untyped-def]
+            assert update_id == reply.update_id
+            assert channel == "telegram"
+            assert lease_token == reply.lease_token
+            self.saved_text = reply_text
+            self.saved_context = recommendation_context
+            return True
+
+        def mark_reply_delivered(self, update_id, *, channel, lease_token):  # type: ignore[no-untyped-def]
+            return True
+
+        def release_reply(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return True
+
+    class Recommender:
+        def revalidate_and_compose(self, value):  # type: ignore[no-untyped-def]
+            value["revalidation"] = {"facts": [{"status": "no_eligible_offer"}]}
+            return "Não consegui confirmar opções comerciais agora. Você pode pesquisar o catálogo ou falar com uma pessoa usando /humano."
+
+    class RecordingMessenger:
+        sent: list[tuple[str, str]] = []
+
+        async def send_message(self, chat_id: str, text: str) -> None:
+            self.sent.append((chat_id, text))
+
+    repository = Repository()
+    messenger = RecordingMessenger()
+    monkeypatch.setattr(app_main, "_session_repository", repository)
+    monkeypatch.setattr(app_main, "_telegram_messenger", messenger)
+    monkeypatch.setattr(app_main, "_recommendation_service", Recommender())
+
+    async def in_process_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(app_main.asyncio, "to_thread", in_process_to_thread)
+    asyncio.run(app_main._deliver_outbox_reply(reply))
+
+    assert messenger.sent[0][1].startswith("Não consegui confirmar opções comerciais")
+    assert repository.saved_text == messenger.sent[0][1]
+    assert repository.saved_context is context
+    assert context["revalidation"]["facts"][0]["status"] == "no_eligible_offer"
+
+
+def test_background_redrive_does_not_send_after_losing_lease(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app import main as app_main
+
+    reply = OutboxReply(
+        id=uuid4(),
+        channel="telegram",
+        update_id=9903,
+        chat_id="12345",
+        text="Resposta antiga",
+        lease_token=uuid4(),
+        recommendation_context={"version": "recommendation.v1", "candidates": []},
+    )
+
+    class Repository:
+        marked_delivered = False
+
+        def update_outbox_recommendation(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return False
+
+        def mark_reply_delivered(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.marked_delivered = True
+            return True
+
+        def release_reply(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return True
+
+    class Recommender:
+        def revalidate_and_compose(self, context):  # type: ignore[no-untyped-def]
+            return "Resposta recém-validada"
+
+    class RecordingMessenger:
+        messages: list[tuple[str, str]] = []
+
+        async def send_message(self, chat_id: str, text: str) -> None:
+            self.messages.append((chat_id, text))
+
+    repository = Repository()
+    messenger = RecordingMessenger()
+    monkeypatch.setattr(app_main, "_session_repository", repository)
+    monkeypatch.setattr(app_main, "_telegram_messenger", messenger)
+    monkeypatch.setattr(app_main, "_recommendation_service", Recommender())
+
+    async def in_process_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(app_main.asyncio, "to_thread", in_process_to_thread)
+    asyncio.run(app_main._deliver_outbox_reply(reply))
+
+    assert messenger.messages == []
+    assert not repository.marked_delivered

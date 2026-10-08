@@ -1,0 +1,39 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "evaluation": "recommendation-security",
+  "version_key": "recommendation-security.v1",
+  "cases": [
+    {
+      "id": "unknown-game-id-invalidates-whole-ranking",
+      "input_class": "invalid-structured-output",
+      "expected_recommendation_sent": false
+    },
+    {
+      "id": "evidence-not-present-in-candidate-invalidates-whole-ranking",
+      "input_class": "unsupported-evidence",
+      "expected_recommendation_sent": false
+    },
+    {
+      "id": "duplicate-game-id-invalidates-whole-ranking",
+      "input_class": "invalid-structured-output",
+      "expected_recommendation_sent": false
+    },
+    {
+      "id": "commercial-facts-change-before-outbox-send",
+      "input_class": "stale-commerce-data",
+      "expected_stale_facts_sent": false,
+      "expected_conflicted_option_removed": true
+    },
+    {
+      "id": "provider-budget-unavailable",
+      "input_class": "budget-unavailable",
+      "expected_recommendation_sent": false,
+      "catalog_search_remains_available": true,
+      "human_handoff_remains_available": true
+    }
+  ],
+  "model_store": false,
+  "raw_text_in_logs_or_traces": false
+}

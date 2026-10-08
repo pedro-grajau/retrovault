@@ -6,6 +6,7 @@ import hashlib
 import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, NotRequired, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -33,13 +34,15 @@ from app.modules.concierge.domain.intent import (
     is_prompt_injection,
 )
 from app.modules.concierge.domain.session import (
+    MAX_OUTBOX_TEXT_CHARS,
     IncomingMessage,
     OutboxReply,
     ProcessingResult,
 )
+from app.modules.concierge.ports.recommendations import Recommendations
 from app.modules.concierge.ports.sessions import SessionStore
 
-WORKFLOW_VERSION = "2.2.v1"
+WORKFLOW_VERSION = "2.3.v1"
 _START_COMMAND = re.compile(
     r"^/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$",
     re.IGNORECASE,
@@ -69,6 +72,8 @@ class SessionState(TypedDict):
     intent_provenance: NotRequired[dict[str, object]]
     extraction_status: NotRequired[str]
     clarification_field: NotRequired[str]
+    prepared_recommendation: NotRequired[dict[str, object] | None]
+    recommendation_context: NotRequired[dict[str, object] | None]
     context_game_id: NotRequired[str | None]
     greeting_sent: NotRequired[bool]
     last_processed_update_id: NotRequired[int]
@@ -88,6 +93,7 @@ def _entry_node(state: SessionState) -> dict[str, object]:
 
     context_game_id = state.get("incoming_game_id") or state.get("context_game_id")
     first_turn = not state.get("greeting_sent")
+    updates_context: dict[str, object] | None = None
     if state.get("command") == "handoff":
         status = state.get("handoff_status")
         if status == "registered":
@@ -131,15 +137,25 @@ def _entry_node(state: SessionState) -> dict[str, object]:
             "tentar de novo ou usar /humano."
         )
     elif state.get("extraction_status") == "accepted":
-        intent_value = state.get("prepared_intent")
-        current_intent = Intent.from_dict(intent_value) or Intent()
-        clarification = clarification_question(
-            cast(Any, state.get("clarification_field", "none")), current_intent
-        )
-        reply = (
-            clarification
-            or "Entendi suas preferências e vou mantê-las para continuarmos a descoberta."
-        )
+        recommendation = state.get("prepared_recommendation")
+        if isinstance(recommendation, dict) and isinstance(
+            recommendation.get("reply_text"), str
+        ):
+            reply = cast(str, recommendation["reply_text"])
+            context = recommendation.get("context")
+            updates_context = (
+                cast(dict[str, object], context) if isinstance(context, dict) else None
+            )
+        else:
+            intent_value = state.get("prepared_intent")
+            current_intent = Intent.from_dict(intent_value) or Intent()
+            clarification = clarification_question(
+                cast(Any, state.get("clarification_field", "none")), current_intent
+            )
+            reply = (
+                clarification
+                or "Entendi suas preferências e vou mantê-las para continuarmos a descoberta."
+            )
     else:
         reply = (
             "Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de "
@@ -156,6 +172,19 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         if reply != greeting:
             reply = f"{greeting} {reply}"
 
+    if len(reply) > MAX_OUTBOX_TEXT_CHARS:
+        fallback = (
+            "Não consegui confirmar opções comerciais agora. Você pode pesquisar "
+            "o catálogo ou falar com uma pessoa usando /humano."
+        )
+        reply = (
+            f"Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de "
+            f"demonstração acontece no Sandbox. {fallback}"
+            if first_turn and state.get("command") not in {"start", "handoff"}
+            else fallback
+        )
+        updates_context = None
+
     updates: dict[str, object] = {
         "workflow_version": WORKFLOW_VERSION,
         "context_game_id": context_game_id,
@@ -164,6 +193,7 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         "last_reply": reply,
         "reply_text": reply,
     }
+    updates["recommendation_context"] = updates_context
     if "prepared_intent" in state:
         updates["intent"] = state["prepared_intent"]
     if "prepared_provenance" in state:
@@ -189,6 +219,7 @@ class SessionWorkflow:
         checkpointer_factory: CheckpointerFactory,
         *,
         intent_extraction: IntentExtractionService | None = None,
+        recommendations: Recommendations | None = None,
         handoff_service: HandoffService | None = None,
         max_message_age_seconds: int = 900,
     ) -> None:
@@ -196,6 +227,7 @@ class SessionWorkflow:
         self.context_references = context_references
         self.checkpointer_factory = checkpointer_factory
         self.intent_extraction = intent_extraction
+        self.recommendations = recommendations
         self.handoff_service = handoff_service
         self.max_message_age_seconds = max_message_age_seconds
 
@@ -278,6 +310,8 @@ class SessionWorkflow:
                 ),
                 "command": command,
                 "extraction_status": "skipped",
+                "prepared_recommendation": None,
+                "recommendation_context": None,
             }
             if not self.store.is_processing_lease_current(
                 message.update_id,
@@ -323,6 +357,28 @@ class SessionWorkflow:
                     initial_state["prepared_provenance"] = decision.provenance.to_dict()
                     initial_state["extraction_status"] = decision.status
                     initial_state["clarification_field"] = decision.clarification_field
+                    if decision.status == "accepted" and self.recommendations is not None:
+                        current_intent = decision.intent
+                        clarification = clarification_question(
+                            cast(Any, decision.clarification_field), current_intent
+                        )
+                        if clarification is None:
+                            outcome = self.recommendations.recommend(
+                                current_intent,
+                                session_id=claim.session_id,
+                                channel=message.channel,
+                                update_id=message.update_id,
+                                correlation_id=message.correlation_id,
+                            )
+                            if outcome.context is not None:
+                                outcome.context["greeting_required"] = not bool(
+                                    prior_state.get("greeting_sent")
+                                )
+                            initial_state["prepared_recommendation"] = {
+                                "status": outcome.status,
+                                "reply_text": outcome.reply_text,
+                                "context": outcome.context,
+                            }
                 state = graph.invoke(
                     initial_state,
                     config=config,
@@ -337,6 +393,11 @@ class SessionWorkflow:
                 processing_lease_token=claim.processing_lease_token,
                 reply_text=reply_text,
                 workflow_version=WORKFLOW_VERSION,
+                recommendation_context=(
+                    state.get("recommendation_context")
+                    if isinstance(state.get("recommendation_context"), dict)
+                    else None
+                ),
             )
         return ProcessingResult("claimed", claim.session_id, reply_text)
 
@@ -372,11 +433,56 @@ class SessionWorkflow:
     def claim_reply(
         self, update_id: int, *, channel: str = "telegram"
     ) -> OutboxReply | None:
-        return self.store.claim_reply(
+        reply = self.store.claim_reply(
             update_id,
             channel=channel,
             now=datetime.now(UTC),
         )
+        return self._prepare_reply(reply)
+
+    def claim_pending_replies(
+        self, *, limit: int = 20, lease_seconds: int = 30
+    ) -> list[OutboxReply]:
+        replies = self.store.claim_pending_replies(
+            now=datetime.now(UTC), limit=limit, lease_seconds=lease_seconds
+        )
+        prepared_replies: list[OutboxReply] = []
+        for reply in replies:
+            prepared = self._prepare_reply(reply)
+            if prepared is not None:
+                prepared_replies.append(prepared)
+        return prepared_replies
+
+    def _prepare_reply(self, reply: OutboxReply | None) -> OutboxReply | None:
+        if reply is None or reply.recommendation_context is None:
+            return reply
+        if self.recommendations is None:
+            return replace(
+                reply,
+                text=(
+                    "Não consegui confirmar opções comerciais agora. Você pode "
+                    "pesquisar o catálogo ou falar com uma pessoa usando /humano."
+                ),
+            )
+        try:
+            current_text = self.recommendations.revalidate_and_compose(
+                reply.recommendation_context
+            )
+        except Exception:
+            current_text = (
+                "Não consegui confirmar opções comerciais agora. Você pode "
+                "pesquisar o catálogo ou falar com uma pessoa usando /humano."
+            )
+        updated = self.store.update_outbox_recommendation(
+            reply.update_id,
+            channel=reply.channel,
+            lease_token=reply.lease_token,
+            reply_text=current_text,
+            recommendation_context=reply.recommendation_context,
+        )
+        if not updated:
+            return None
+        return replace(reply, text=current_text)
 
     def mark_reply_delivered(
         self, update_id: int, *, channel: str = "telegram", lease_token: UUID

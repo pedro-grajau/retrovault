@@ -1,0 +1,28 @@
+{
+  "owner": "concierge",
+  "version": 2,
+  "status": "active",
+  "state_machine": "conversation-session",
+  "workflow_version": "2.3.v1",
+  "states": ["active", "terminal"],
+  "terminal_states": ["terminal"],
+  "terminal_state_reversible": false,
+  "checkpoint_store": "PostgreSQL LangGraph PostgresSaver",
+  "checkpoint_payloads": [
+    "versioned-intent",
+    "intent-provenance",
+    "recommendation-plan",
+    "candidate-evidence",
+    "validated-ranking"
+  ],
+  "intent_contract": "intent.v2.json",
+  "recommendation_contract": "recommendation.v1.json",
+  "outbox_recommendation_context": "sanitized-and-revalidated-before-delivery",
+  "raw_message_retained_in_checkpoint": false,
+  "deduplication": "channel-and-update_id",
+  "message_processing_lease": "fenced-by-lease-token",
+  "outbox_delivery": "leased-with-skip-locked-claims-and-independent-redrive",
+  "late_or_out_of_order_handling": "persist-for-reconciliation-without-automatic-reply",
+  "retention_days_config": "PIXEL_TELEGRAM_RETENTION_DAYS",
+  "retention_days_default": 30
+}

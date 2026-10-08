@@ -238,6 +238,7 @@ class InMemorySessionStore:
         processing_lease_token: UUID,
         reply_text: str,
         workflow_version: str,
+        recommendation_context: dict[str, object] | None = None,
     ) -> None:
         with self._lock:
             record = self._messages[(channel, update_id)]
@@ -252,6 +253,7 @@ class InMemorySessionStore:
                 status="processed",
                 processing_lease_token=None,
                 reply=reply_text,
+                recommendation_context=recommendation_context,
                 workflow_version=workflow_version,
                 delivery_status="pending",
             )
@@ -293,6 +295,27 @@ class InMemorySessionStore:
                     )
             return replies
 
+    def update_outbox_recommendation(
+        self,
+        update_id: int,
+        *,
+        channel: str,
+        lease_token: UUID,
+        reply_text: str,
+        recommendation_context: dict[str, object],
+    ) -> bool:
+        with self._lock:
+            record = self._messages.get((channel, update_id))
+            if (
+                record is None
+                or record.get("delivery_status") != "delivering"
+                or record.get("delivery_lease_token") != lease_token
+            ):
+                return False
+            record["reply"] = reply_text
+            record["recommendation_context"] = recommendation_context
+            return True
+
     @staticmethod
     def _claimable_reply(record: dict[str, Any], now: datetime) -> bool:
         return record.get("delivery_status") == "pending" or (
@@ -320,6 +343,7 @@ class InMemorySessionStore:
             chat_id=record["external_chat_id"],
             text=record["reply"],
             lease_token=token,
+            recommendation_context=record.get("recommendation_context"),
         )
 
     def mark_reply_delivered(

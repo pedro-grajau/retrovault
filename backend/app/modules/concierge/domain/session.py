@@ -9,6 +9,7 @@ from uuid import UUID
 
 SessionChannel = Literal["telegram", "simulator"]
 ClaimStatus = Literal["claimed", "duplicate", "in_progress", "reconciliation"]
+MAX_OUTBOX_TEXT_CHARS = 4096
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class OutboxReply:
     chat_id: str
     text: str
     lease_token: UUID
+    recommendation_context: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)

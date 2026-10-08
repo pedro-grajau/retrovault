@@ -33,6 +33,7 @@ from app.modules.concierge.application.session_workflow import (
     SessionWorkflow,
 )
 from app.modules.concierge.ports.handoffs import HandoffStore
+from app.modules.concierge.ports.recommendations import Recommendations
 from app.modules.concierge.ports.sessions import SessionStore, TelegramMessenger
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ def configure_services(
     session_store: SessionStore | None = None,
     checkpointer_factory: CheckpointerFactory | None = None,
     intent_extraction_service: IntentExtractionService | None = None,
+    recommendation_service: Recommendations | None = None,
     handoff_store: HandoffStore | None = None,
     telegram_messenger: TelegramMessenger | None = None,
     webhook_secret: str = "",
@@ -96,6 +98,7 @@ def configure_services(
             _context_references,
             checkpointer_factory,
             intent_extraction=intent_extraction_service,
+            recommendations=recommendation_service,
             handoff_service=_handoff_service,
             max_message_age_seconds=message_max_age_seconds,
         )

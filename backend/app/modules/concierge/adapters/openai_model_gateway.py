@@ -13,6 +13,7 @@ from app.modules.concierge.domain.intent import Intent
 from app.modules.concierge.ports.models import (
     ModelCallFailure,
     ModelExtraction,
+    ModelRanking,
     ModelUsage,
 )
 
@@ -20,7 +21,13 @@ _PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "application"
     / "prompts"
-    / "intent-extraction.v1.md"
+    / "intent-extraction.v2.md"
+)
+_RANKING_PROMPT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "application"
+    / "prompts"
+    / "recommendation-ranking.v1.md"
 )
 _FIXED_MESSAGE_OVERHEAD_TOKENS = 256
 
@@ -53,6 +60,13 @@ def strict_intent_schema() -> dict[str, Any]:
             "items": {"type": "string", "maxLength": 120},
             "maxItems": 5,
         },
+        "mode": {
+            "anyOf": [
+                {"type": "string", "enum": ["purchase", "rental"]},
+                {"type": "null"},
+            ]
+        },
+        "mode_cleared": {"type": "boolean"},
         "clarification_field": {
             "type": "string",
             "enum": [
@@ -64,6 +78,34 @@ def strict_intent_schema() -> dict[str, Any]:
                 "none",
             ],
         },
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def strict_recommendation_schema() -> dict[str, Any]:
+    properties = {
+        "recommendations": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "game_id": {"type": "string", "maxLength": 36},
+                    "evidence": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 96},
+                        "maxItems": 8,
+                    },
+                },
+                "required": ["game_id", "evidence"],
+                "additionalProperties": False,
+            },
+        }
     }
     return {
         "type": "object",
@@ -91,6 +133,7 @@ class OpenAIModelGateway:
             timeout=timeout_seconds,
         )
         self.prompt = prompt if prompt is not None else _PROMPT_PATH.read_text()
+        self.ranking_prompt = _RANKING_PROMPT_PATH.read_text()
 
     def extract_intent(
         self,
@@ -172,9 +215,85 @@ class OpenAIModelGateway:
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "concierge_intent_v1",
+                    "name": "concierge_intent_v2",
                     "strict": True,
                     "schema": strict_intent_schema(),
+                }
+            },
+        }
+
+    def ranking_input_token_upper_bound(
+        self, intent: Intent, candidates: list[dict[str, object]]
+    ) -> int:
+        serialized_request = json.dumps(
+            self._ranking_request_payload(intent, candidates),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return len(serialized_request.encode("utf-8")) + _FIXED_MESSAGE_OVERHEAD_TOKENS
+
+    def rank_recommendations(
+        self,
+        intent: Intent,
+        candidates: list[dict[str, object]],
+        *,
+        correlation_id: UUID,
+    ) -> ModelRanking:
+        try:
+            response = self.client.responses.create(
+                **self._ranking_request_payload(intent, candidates),
+                extra_headers={"X-Client-Request-Id": str(correlation_id)},
+            )
+        except APIStatusError as exc:
+            raise ModelCallFailure(
+                conclusive=(
+                    exc.status_code < 500 and exc.status_code not in {408, 409}
+                )
+            ) from None
+        except (APIConnectionError, APITimeoutError):
+            raise ModelCallFailure(conclusive=False) from None
+        except Exception:
+            raise ModelCallFailure(conclusive=False) from None
+
+        response = cast(Any, response)
+        usage = response.usage
+        output_json = response.output_text
+        if (
+            usage is None
+            or type(usage.input_tokens) is not int
+            or type(usage.output_tokens) is not int
+            or not isinstance(output_json, str)
+        ):
+            raise ModelCallFailure(conclusive=False)
+        return ModelRanking(
+            output_json,
+            ModelUsage(usage.input_tokens, usage.output_tokens),
+        )
+
+    def _ranking_request_payload(
+        self, intent: Intent, candidates: list[dict[str, object]]
+    ) -> dict[str, Any]:
+        return {
+            "model": self.model_snapshot,
+            "store": False,
+            "max_output_tokens": min(self.max_output_tokens, 600),
+            "input": [
+                {"role": "system", "content": self.ranking_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"intent": intent.to_dict(), "candidates": candidates},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "concierge_recommendation_ranking_v1",
+                    "strict": True,
+                    "schema": strict_recommendation_schema(),
                 }
             },
         }

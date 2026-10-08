@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from typing import Literal, cast
 from uuid import UUID
 
-INTENT_VERSION = "intent.v1"
-PROMPT_VERSION = "intent-extraction.v1"
+INTENT_VERSION = "intent.v2"
+PROMPT_VERSION = "intent-extraction.v2"
+GameMode = Literal["purchase", "rental"]
 IntentField = Literal["platform", "genre", "style", "players", "price_range"]
 ClarificationField = IntentField | Literal["none"]
 
@@ -31,6 +32,7 @@ class Intent:
     price_min_brl_cents: int | None = None
     price_max_brl_cents: int | None = None
     constraints: tuple[str, ...] = ()
+    mode: GameMode | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -41,6 +43,7 @@ class Intent:
             "price_min_brl_cents": self.price_min_brl_cents,
             "price_max_brl_cents": self.price_max_brl_cents,
             "constraints": list(self.constraints),
+            "mode": self.mode,
         }
 
     @classmethod
@@ -51,6 +54,9 @@ class Intent:
             payload_value = dict(value)
             if isinstance(payload_value.get("constraints"), tuple):
                 payload_value["constraints"] = list(payload_value["constraints"])
+            # Checkpoints written before intent.v2 do not contain a mode.
+            payload_value.setdefault("mode", None)
+            payload_value.setdefault("mode_cleared", False)
             payload = IntentPayload.from_mapping(payload_value)
         except (TypeError, ValueError):
             return None
@@ -62,6 +68,7 @@ class Intent:
             price_min_brl_cents=payload.price_min_brl_cents,
             price_max_brl_cents=payload.price_max_brl_cents,
             constraints=tuple(payload.constraints),
+            mode=payload.mode,
         )
 
 
@@ -76,6 +83,8 @@ class IntentPayload:
     price_min_brl_cents: int | None
     price_max_brl_cents: int | None
     constraints: tuple[str, ...]
+    mode: GameMode | None
+    mode_cleared: bool
 
     @classmethod
     def from_mapping(cls, value: object) -> IntentPayload:
@@ -90,6 +99,8 @@ class IntentPayload:
             "price_min_brl_cents",
             "price_max_brl_cents",
             "constraints",
+            "mode",
+            "mode_cleared",
         }
         if set(values) != fields:
             raise ValueError("invalid_intent_fields")
@@ -105,9 +116,16 @@ class IntentPayload:
             values["price_max_brl_cents"], minimum=0, maximum=100_000_000
         )
         constraints = _constraints(values["constraints"])
+        mode_value = values["mode"]
+        if mode_value not in (None, "purchase", "rental"):
+            raise ValueError("invalid_intent_mode")
+        mode = cast(GameMode | None, mode_value)
+        mode_cleared = values["mode_cleared"]
+        if type(mode_cleared) is not bool or (mode_cleared and mode is not None):
+            raise ValueError("invalid_intent_mode_clear")
         if minimum is not None and maximum is not None and minimum > maximum:
             raise ValueError("invalid_price_range")
-        return cls(platform, genre, style, players, minimum, maximum, constraints)
+        return cls(platform, genre, style, players, minimum, maximum, constraints, mode, mode_cleared)
 
 
 @dataclass(frozen=True)
@@ -128,6 +146,8 @@ class IntentExtractionPayload(IntentPayload):
             "price_min_brl_cents",
             "price_max_brl_cents",
             "constraints",
+            "mode",
+            "mode_cleared",
             "clarification_field",
         }:
             raise ValueError("invalid_intent_extraction_fields")
@@ -150,6 +170,8 @@ class IntentExtractionPayload(IntentPayload):
             intent.price_min_brl_cents,
             intent.price_max_brl_cents,
             intent.constraints,
+            intent.mode,
+            intent.mode_cleared,
             clarification_field,
         )
 
@@ -249,6 +271,7 @@ def merge_intent(previous: Intent | None, extracted: IntentPayload) -> Intent:
         price_min_brl_cents=minimum,
         price_max_brl_cents=maximum,
         constraints=tuple(constraints[:5]),
+        mode=(None if extracted.mode_cleared else extracted.mode or previous.mode),
     )
 
 
