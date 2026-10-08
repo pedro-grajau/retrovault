@@ -6,6 +6,11 @@
   "version_key": "recommendation_version+source_update_id",
   "maximum_candidates": 20,
   "maximum_recommendations": 3,
+  "editorial_match_evidence": {
+    "fields": ["title", "genre", "description", "developer", "publisher", "edition"],
+    "maximum_value_chars": 240,
+    "optional_for_legacy_contexts": true
+  },
   "greeting_required": {"type": "boolean", "persisted_for_delivery_recomposition": true},
   "model_output": {
     "fields": ["game_id", "evidence"],

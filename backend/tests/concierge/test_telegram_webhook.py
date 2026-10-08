@@ -579,3 +579,55 @@ def test_background_redrive_sends_and_persists_fresh_commerce_result(monkeypatch
     assert repository.saved_text == messenger.sent[0][1]
     assert repository.saved_context is context
     assert context["revalidation"]["facts"][0]["status"] == "no_eligible_offer"
+
+
+def test_background_redrive_does_not_send_after_losing_lease(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app import main as app_main
+
+    reply = OutboxReply(
+        id=uuid4(),
+        channel="telegram",
+        update_id=9903,
+        chat_id="12345",
+        text="Resposta antiga",
+        lease_token=uuid4(),
+        recommendation_context={"version": "recommendation.v1", "candidates": []},
+    )
+
+    class Repository:
+        marked_delivered = False
+
+        def update_outbox_recommendation(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return False
+
+        def mark_reply_delivered(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.marked_delivered = True
+            return True
+
+        def release_reply(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return True
+
+    class Recommender:
+        def revalidate_and_compose(self, context):  # type: ignore[no-untyped-def]
+            return "Resposta recém-validada"
+
+    class RecordingMessenger:
+        messages: list[tuple[str, str]] = []
+
+        async def send_message(self, chat_id: str, text: str) -> None:
+            self.messages.append((chat_id, text))
+
+    repository = Repository()
+    messenger = RecordingMessenger()
+    monkeypatch.setattr(app_main, "_session_repository", repository)
+    monkeypatch.setattr(app_main, "_telegram_messenger", messenger)
+    monkeypatch.setattr(app_main, "_recommendation_service", Recommender())
+
+    async def in_process_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(app_main.asyncio, "to_thread", in_process_to_thread)
+    asyncio.run(app_main._deliver_outbox_reply(reply))
+
+    assert messenger.messages == []
+    assert not repository.marked_delivered

@@ -111,6 +111,8 @@ class RecommendationCandidateSnapshot:
     version: int
     offers: tuple[RecommendationOfferSnapshot, ...]
     evidence_refs: tuple[str, ...]
+    matched_fields: tuple[str, ...] = ()
+    matched_attributes: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -121,6 +123,8 @@ class RecommendationCandidateSnapshot:
             "version": self.version,
             "offers": [offer.to_dict() for offer in self.offers],
             "evidence_refs": list(self.evidence_refs),
+            "matched_fields": list(self.matched_fields),
+            "matched_attributes": dict(self.matched_attributes),
         }
 
 
@@ -233,8 +237,12 @@ def _required_integer(values: dict[str, object], key: str, minimum: int) -> int:
 
 
 def _candidate_from_dict(value: object) -> RecommendationCandidateSnapshot:
-    if type(value) is not dict or set(value) != {
+    base_keys = {
         "game_id", "title", "platform", "genre", "version", "offers", "evidence_refs"
+    }
+    extended_keys = base_keys | {"matched_fields", "matched_attributes"}
+    if type(value) is not dict or frozenset(value) not in {
+        frozenset(base_keys), frozenset(extended_keys)
     }:
         raise ValueError("invalid_recommendation_candidate")
     raw = cast(dict[str, object], value)
@@ -253,10 +261,32 @@ def _candidate_from_dict(value: object) -> RecommendationCandidateSnapshot:
         raise ValueError("invalid_recommendation_candidate")
     if any(type(item) is not str or len(item) > 96 for item in evidence_raw):
         raise ValueError("invalid_recommendation_candidate")
+    allowed_match_fields = {"title", "genre", "description", "developer", "publisher", "edition"}
+    matched_fields_raw = raw.get("matched_fields", [])
+    matched_attributes_raw = raw.get("matched_attributes", {})
+    if (
+        type(matched_fields_raw) is not list
+        or len(matched_fields_raw) > len(allowed_match_fields)
+        or any(type(item) is not str or item not in allowed_match_fields for item in matched_fields_raw)
+        or len(set(matched_fields_raw)) != len(matched_fields_raw)
+        or type(matched_attributes_raw) is not dict
+        or not set(matched_attributes_raw).issubset(matched_fields_raw)
+    ):
+        raise ValueError("invalid_recommendation_candidate")
+    for field, matched_value in matched_attributes_raw.items():
+        if (
+            field not in allowed_match_fields
+            or type(matched_value) is not str
+            or not matched_value
+            or len(matched_value) > 240
+            or any(not char.isprintable() for char in matched_value)
+        ):
+            raise ValueError("invalid_recommendation_candidate")
     offers = tuple(_offer_from_dict(item) for item in offers_raw)
     return RecommendationCandidateSnapshot(
         game_id, title, platform, cast(str | None, genre_value), version, offers,
-        tuple(evidence_raw),
+        tuple(evidence_raw), tuple(matched_fields_raw),
+        tuple(sorted(matched_attributes_raw.items())),
     )
 
 

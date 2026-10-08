@@ -70,7 +70,11 @@ def test_postgres_title_search_ranks_pages_and_stays_under_latency_budget() -> N
             ("Filter Sentinel", scenario_platform, "Action"),
             ("Filter Sentinel", filter_platform, "Demo"),
         ]
-        titles = scenario_titles + filter_titles + [
+        editorial_titles = [
+            ("Purple Metadata Item", scenario_platform, "Demo"),
+            ("Orange Editorial Item", scenario_platform, "Demo"),
+        ]
+        titles = scenario_titles + filter_titles + editorial_titles + [
             (
                 f"Demo RetroVault Game {index:05d}",
                 "SNES" if index % 2 else "PS2",
@@ -88,9 +92,18 @@ def test_postgres_title_search_ranks_pages_and_stays_under_latency_budget() -> N
                     "source_record_id": f"story-1.6:{run_id}:{index}",
                     "title": title,
                     "platform": platform,
-                    "editorial": json.dumps(
-                        {"attributes": {"title": title, "platform": platform, "genre": genre}}
-                    ),
+                    "editorial": json.dumps({"attributes": {
+                        "title": title,
+                        "platform": platform,
+                        "genre": genre,
+                        **(
+                            {"description": "Super Mario Wurldd"}
+                            if title == "Purple Metadata Item"
+                            else {"description": "handheld puzzle magic"}
+                            if title == "Orange Editorial Item"
+                            else {}
+                        ),
+                    }}),
                     "etag": "a" * 64,
                     "cover_hash": media_hash,
                     "updated_at": datetime.now(UTC),
@@ -147,6 +160,33 @@ def test_postgres_title_search_ranks_pages_and_stays_under_latency_budget() -> N
             "The Legend of Zelda A Link to the Past"
         ]
 
+        editorial_only_hits, _ = repository.search_games(
+            query="handheld puzzle magic", limit=5, platform=scenario_platform
+        )
+        assert [hit.game.title for hit in editorial_only_hits] == [
+            "Orange Editorial Item"
+        ]
+        assert editorial_only_hits[0].matched_fields == ("description",)
+
+        fuzzy_and_editorial_hits, _ = repository.search_games(
+            query="Super Mario Wurldd", limit=10, platform=scenario_platform
+        )
+        fuzzy_title_index = next(
+            index
+            for index, hit in enumerate(fuzzy_and_editorial_hits)
+            if hit.game.title == "Super Mario Wurld"
+        )
+        editorial_only_index = next(
+            index
+            for index, hit in enumerate(fuzzy_and_editorial_hits)
+            if hit.game.title == "Purple Metadata Item"
+        )
+        assert fuzzy_title_index < editorial_only_index
+        assert "title" in fuzzy_and_editorial_hits[fuzzy_title_index].matched_fields
+        assert fuzzy_and_editorial_hits[editorial_only_index].matched_fields == (
+            "description",
+        )
+
         filter_ids = ids[5:8]
         by_platform, _ = repository.search_games(
             query="Filter Sentinel", limit=20, platform=scenario_platform
@@ -160,7 +200,10 @@ def test_postgres_title_search_ranks_pages_and_stays_under_latency_budget() -> N
             platform=scenario_platform,
             genre="Demo",
         )
-        assert {hit.game.id for hit in by_platform} == set(filter_ids[:2])
+        assert {hit.game.id for hit in by_platform} == set(filter_ids[:2]), (
+            [(hit.game.title, str(hit.game.id)) for hit in by_platform],
+            [str(game_id) for game_id in filter_ids[:2]],
+        )
         assert {hit.game.id for hit in by_genre} == {filter_ids[0], filter_ids[2]}
         assert [hit.game.id for hit in by_both] == [filter_ids[0]]
 

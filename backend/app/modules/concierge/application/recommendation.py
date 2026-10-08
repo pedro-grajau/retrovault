@@ -28,6 +28,7 @@ from app.modules.concierge.domain.recommendation import (
     RecommendationPlan,
     RecommendationProvenance,
 )
+from app.modules.concierge.domain.session import MAX_OUTBOX_TEXT_CHARS
 from app.modules.concierge.ports.ai_ledger import AiLedger
 from app.modules.concierge.ports.models import ModelCallFailure, ModelGateway
 from app.modules.concierge.ports.recommendations import RecommendationOutcome
@@ -40,12 +41,16 @@ _NO_MATCH = (
     "Ainda não encontrei uma opção publicada com os filtros comerciais que você "
     "informou. Você pode ajustar a busca no catálogo ou falar com uma pessoa usando /humano."
 )
+_NO_RANKED_MATCH = (
+    "Não encontrei uma recomendação adequada entre as opções comerciais elegíveis. "
+    "Você pode ajustar suas preferências, pesquisar o catálogo ou falar com uma pessoa usando /humano."
+)
 _UNVERIFIABLE_CONSTRAINT = (
     "O catálogo publicado não permite confirmar uma ou mais restrições informadas. "
     "Você pode ajustar a busca no catálogo ou falar com uma pessoa usando /humano."
 )
-_MAX_REPLY_CHARS = 4096
 _GREETING = "Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de demonstração acontece no Sandbox."
+_EDITORIAL_MATCH_FIELDS = ("title", "genre", "description", "developer", "publisher", "edition")
 _RELEVANCE_REFS = {
     "intent:platform",
     "intent:genre",
@@ -216,7 +221,7 @@ class RecommendationService:
         except (TypeError, ValueError):
             return RecommendationOutcome("fallback", _FALLBACK)
         if not ranking_payload.recommendations:
-            return RecommendationOutcome("empty", _NO_MATCH)
+            return RecommendationOutcome("empty", _NO_RANKED_MATCH)
         by_id = {candidate.game_id: candidate for candidate in snapshots}
         for ranked in ranking_payload.recommendations:
             candidate = by_id.get(ranked.game_id)
@@ -360,6 +365,10 @@ class RecommendationService:
         if intent.price_min_brl_cents is not None or intent.price_max_brl_cents is not None:
             refs.append("intent:price")
         refs.extend(f"commerce:offer:{offer.id}" for offer in candidate.offers)
+        matched_fields = tuple(
+            field for field in _EDITORIAL_MATCH_FIELDS if field in candidate.matched_fields
+        )
+        matched_attributes = self._matched_attributes(game, genre, matched_fields)
         offers = tuple(
             RecommendationOfferSnapshot(
                 offer_id=offer.id,
@@ -380,15 +389,20 @@ class RecommendationService:
             version=game.version,
             offers=offers,
             evidence_refs=tuple(refs),
+            matched_fields=matched_fields,
+            matched_attributes=matched_attributes,
         )
 
     @staticmethod
     def _model_candidate(candidate: RecommendationCandidateSnapshot) -> dict[str, object]:
         return {
             "game_id": str(candidate.game_id),
-            "title": candidate.title,
-            "platform": candidate.platform,
-            "genre": candidate.genre,
+            "title": RecommendationService._display_catalog_text(candidate.title, 200),
+            "platform": RecommendationService._display_catalog_text(candidate.platform, 96),
+            "genre": (
+                RecommendationService._display_catalog_text(candidate.genre, 96)
+                if candidate.genre is not None else None
+            ),
             "offers": [
                 {
                     "offer_id": str(offer.offer_id),
@@ -401,7 +415,31 @@ class RecommendationService:
                 for offer in candidate.offers
             ],
             "evidence_refs": list(candidate.evidence_refs),
+            "matched_fields": list(candidate.matched_fields),
+            "matched_attributes": dict(candidate.matched_attributes),
         }
+
+    @staticmethod
+    def _matched_attributes(
+        game: PublishedGame,
+        genre: str | None,
+        matched_fields: tuple[str, ...],
+    ) -> tuple[tuple[str, str], ...]:
+        attributes = game.editorial.get("attributes")
+        values = attributes if isinstance(attributes, dict) else {}
+        result: list[tuple[str, str]] = []
+        for field in matched_fields:
+            if field == "title":
+                value = game.title
+            elif field == "genre":
+                value = genre
+            else:
+                value = values.get(field)
+            if isinstance(value, str):
+                normalized = RecommendationService._display_catalog_text(value, 240)
+                if normalized:
+                    result.append((field, normalized))
+        return tuple(result)
 
     @staticmethod
     def _snapshot_map(
@@ -456,7 +494,9 @@ class RecommendationService:
             game, offers = fresh[ranked_game.game_id]
             candidate = candidate_by_id[ranked_game.game_id]
             reason = self._reason(game, offers, candidate, ranked_game, plan.intent)
-            lines.append(f"{index}. {game.title} ({game.platform}) — {reason}")
+            title = self._display_catalog_text(game.title, 200) or "Título indisponível"
+            platform = self._display_catalog_text(game.platform, 96) or "plataforma não informada"
+            lines.append(f"{index}. {title} ({platform}) — {reason}")
             for offer in self._display_offers(offers):
                 label = "Compra" if offer.mode == "purchase" else "Aluguel"
                 price = self._format_brl(offer.price_minor)
@@ -473,20 +513,27 @@ class RecommendationService:
                 "confirmar essa compatibilidade."
             )
         text = "\n".join(lines)
-        return text if len(text) <= _MAX_REPLY_CHARS else _FALLBACK
+        return text if len(text) <= MAX_OUTBOX_TEXT_CHARS else _FALLBACK
 
     @staticmethod
     def _with_greeting(plan: RecommendationPlan, text: str) -> str:
         if not plan.greeting_required or text.startswith(_GREETING):
-            return text
-        return f"{_GREETING} {text}"
+            result = text
+        else:
+            result = f"{_GREETING} {text}"
+        return result if len(result) <= MAX_OUTBOX_TEXT_CHARS else _FALLBACK
+
+    @staticmethod
+    def _display_catalog_text(value: str, maximum: int) -> str:
+        printable = "".join(char if char.isprintable() else " " for char in value)
+        normalized = " ".join(printable.split())
+        if len(normalized) > maximum:
+            return normalized[: maximum - 3].rstrip() + "..."
+        return normalized
 
     @staticmethod
     def _display_condition(value: str) -> str:
-        normalized = " ".join(value.split())
-        if len(normalized) > 160:
-            return normalized[:157] + "..."
-        return normalized
+        return RecommendationService._display_catalog_text(value, 160)
 
     @staticmethod
     def _reason(
@@ -498,11 +545,16 @@ class RecommendationService:
     ) -> str:
         evidence = set(ranked.evidence)
         reasons: list[str] = []
-        genre = RecommendationService._genre(game)
+        genre_value = RecommendationService._genre(game)
+        genre = (
+            RecommendationService._display_catalog_text(genre_value, 96)
+            if genre_value is not None else None
+        )
+        platform = RecommendationService._display_catalog_text(game.platform, 96)
         if "intent:genre" in evidence and genre:
             reasons.append(f"o catálogo o classifica como {genre}")
         if "intent:platform" in evidence:
-            reasons.append(f"está cadastrado para {game.platform}")
+            reasons.append(f"está cadastrado para {platform}")
         if "intent:style_match" in evidence:
             reasons.append("os dados publicados coincidem com a busca textual pelo estilo descrito")
         if "intent:mode" in evidence:

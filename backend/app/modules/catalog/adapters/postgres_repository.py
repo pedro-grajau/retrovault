@@ -412,6 +412,12 @@ class PostgresCatalogRepository:
                            WHEN strpos(normalized_title, normalized_query) > 0
                              OR to_tsvector('simple', normalized_title)
                                 @@ plainto_tsquery('simple', normalized_query) THEN 1
+                           WHEN (
+                               (normalized_title % normalized_query
+                                AND similarity(normalized_title, normalized_query) >= 0.30)
+                               OR (normalized_query <% normalized_title
+                                   AND word_similarity(normalized_query, normalized_title) >= 0.30)
+                           ) THEN 2
                            WHEN strpos(normalized_genre, normalized_query) > 0
                              OR strpos(normalized_description, normalized_query) > 0
                              OR strpos(normalized_developer, normalized_query) > 0
@@ -420,7 +426,7 @@ class PostgresCatalogRepository:
                              OR to_tsvector('simple', concat_ws(' ', normalized_genre,
                                 normalized_description, normalized_developer,
                                 normalized_publisher, normalized_edition))
-                                @@ plainto_tsquery('simple', normalized_query) THEN 2
+                                @@ plainto_tsquery('simple', normalized_query) THEN 3
                            ELSE 3
                        END AS match_rank,
                        round(

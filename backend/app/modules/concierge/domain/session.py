@@ -9,6 +9,7 @@ from uuid import UUID
 
 SessionChannel = Literal["telegram", "simulator"]
 ClaimStatus = Literal["claimed", "duplicate", "in_progress", "reconciliation"]
+MAX_OUTBOX_TEXT_CHARS = 4096
 
 
 @dataclass(frozen=True)

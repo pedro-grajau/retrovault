@@ -34,6 +34,7 @@ from app.modules.concierge.domain.intent import (
     is_prompt_injection,
 )
 from app.modules.concierge.domain.session import (
+    MAX_OUTBOX_TEXT_CHARS,
     IncomingMessage,
     OutboxReply,
     ProcessingResult,
@@ -168,6 +169,19 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         )
         if reply != greeting:
             reply = f"{greeting} {reply}"
+
+    if len(reply) > MAX_OUTBOX_TEXT_CHARS:
+        fallback = (
+            "Não consegui confirmar opções comerciais agora. Você pode pesquisar "
+            "o catálogo ou falar com uma pessoa usando /humano."
+        )
+        reply = (
+            f"Oi! Sou Pixel, assistente de IA da RetroVault. Esta conversa de "
+            f"demonstração acontece no Sandbox. {fallback}"
+            if first_turn and state.get("command") not in {"start", "handoff"}
+            else fallback
+        )
+        updates_context = None
 
     updates: dict[str, object] = {
         "workflow_version": WORKFLOW_VERSION,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -7,12 +8,83 @@ from threading import Lock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine
 
 from app.modules.concierge.adapters.postgres_sessions import (
     PostgresSessionRepository,
     SessionLeaseLost,
 )
 from app.modules.concierge.domain.session import IncomingMessage
+from app.platform.config.settings import settings
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_DB_TESTS") != "1",
+    reason="PostgreSQL efêmero do compose não está ativo",
+)
+def test_postgres_outbox_roundtrips_recommendation_context() -> None:
+    engine = create_engine(settings.database_url)
+    connection = engine.connect()
+    transaction = connection.begin()
+
+    @contextmanager
+    def use_seeded_transaction():
+        yield connection
+
+    class TransactionalEngine:
+        begin = staticmethod(use_seeded_transaction)
+
+    try:
+        repository = PostgresSessionRepository(TransactionalEngine())  # type: ignore[arg-type]
+        now = datetime.now(UTC)
+        update_id = int(now.timestamp() * 1000) % (2**63 - 1)
+        message = IncomingMessage(
+            channel="simulator",
+            external_user_id=f"story-2.3-{uuid4().hex}",
+            external_chat_id=f"story-2.3-{uuid4().hex}",
+            update_id=update_id,
+            message_id=1,
+            text="Quero um jogo de aventura",
+            sent_at=now,
+            received_at=now,
+            correlation_id=uuid4(),
+        )
+        claim = repository.claim_message(
+            message,
+            safe_text=message.text,
+            context_game_id=None,
+            now=now,
+            max_age_seconds=300,
+        )
+        assert claim.status == "claimed"
+        assert claim.session_id is not None
+        assert claim.processing_lease_token is not None
+
+        context: dict[str, object] = {
+            "version": "recommendation.v1",
+            "candidates": [],
+            "query": {"genre": "adventure"},
+        }
+        repository.complete_message(
+            update_id,
+            channel=message.channel,
+            session_id=claim.session_id,
+            processing_lease_token=claim.processing_lease_token,
+            reply_text="Separei algumas opções para você.",
+            workflow_version="2.3.v1",
+            recommendation_context=context,
+        )
+
+        reply = repository.claim_reply(
+            update_id, channel=message.channel, now=now
+        )
+        assert reply is not None
+        assert reply.text == "Separei algumas opções para você."
+        assert reply.recommendation_context == context
+    finally:
+        transaction.rollback()
+        connection.close()
+        engine.dispose()
 
 
 class Result:

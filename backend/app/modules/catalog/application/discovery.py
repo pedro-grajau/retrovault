@@ -122,7 +122,6 @@ class PublicDiscovery:
         # before the twenty-candidate cap.
         structured: list[DiscoveryCandidate] = []
         cursor = None
-        scanned = 0
         while scanned < 500:
             games, cursor = self.catalog.list_games(
                 limit=min(100, 500 - scanned),

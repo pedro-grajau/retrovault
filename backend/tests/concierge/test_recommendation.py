@@ -14,6 +14,7 @@ from app.modules.commerce.domain.offers import Offer
 from app.modules.concierge.application.recommendation import RecommendationService
 from app.modules.concierge.domain.ai_ledger import AiPricing, ReservationGrant
 from app.modules.concierge.domain.intent import Intent
+from app.modules.concierge.domain.recommendation import RecommendationPlan
 from app.modules.concierge.ports.models import ModelRanking, ModelUsage
 
 
@@ -222,6 +223,48 @@ def test_text_discovery_scans_past_ineligible_first_page() -> None:
     assert [item.game.id for item in candidates] == [games[-1].id]
 
 
+def test_text_and_structured_searches_share_the_500_record_scan_budget() -> None:
+    games = [PublishedGame(**{
+        **game().__dict__, "id": uuid4(), "title": f"Adventure {index}",
+    }) for index in range(500)]
+
+    class ScanCatalog(FakeCatalog):
+        text_scanned = 0
+        structured_scanned = 0
+
+        def search_games(self, *, query, limit, cursor=None, platform=None, genre=None, cursor_context=None):
+            offset = int(cursor or "0")
+            page = games[offset:min(offset + limit, 300)]
+            self.text_scanned += len(page)
+            next_cursor = str(offset + len(page)) if offset + len(page) < 300 else None
+            return [type("Hit", (), {
+                "game": item,
+                "cursor_after": str(offset + index + 1),
+                "matched_fields": ("title",),
+            })() for index, item in enumerate(page)], next_cursor
+
+        def list_games(self, *, limit, cursor=None, platform=None, genre=None):
+            offset = int(cursor or "0")
+            page = games[offset:offset + limit]
+            self.structured_scanned += len(page)
+            next_cursor = str(offset + len(page)) if offset + len(page) < len(games) else None
+            return page, next_cursor
+
+    class EmptyCommerce:
+        def list_offers(self, game_ids):
+            return {}
+
+    catalog = ScanCatalog()
+    candidates = PublicDiscovery(catalog, EmptyCommerce()).recommend_candidates(
+        RecommendationCriteria(query="Adventure", platform="SNES")
+    )
+
+    assert candidates == []
+    assert catalog.text_scanned == 300
+    assert catalog.structured_scanned == 200
+    assert catalog.text_scanned + catalog.structured_scanned == 500
+
+
 def test_structured_discovery_uses_offer_facts_before_twenty_candidate_cap() -> None:
     catalog = FakeCatalog()
     catalog.games = [PublishedGame(**{
@@ -271,7 +314,20 @@ def test_valid_ranking_composes_only_verified_facts_and_revalidates_before_deliv
 
 
 def test_style_evidence_does_not_claim_the_title_matched_when_editorial_text_did() -> None:
+    published = PublishedGame(**{
+        **game().__dict__,
+        "editorial": {
+            "attributes": {
+                "genre": "Adventure",
+                "description": "Adventure with exploration and puzzles",
+            }
+        },
+    })
+
     class DescriptionCatalog(FakeCatalog):
+        def __init__(self) -> None:
+            super().__init__(published)
+
         def search_games(self, **kwargs):  # type: ignore[no-untyped-def]
             hits, cursor = super().search_games(**kwargs)
             return [
@@ -295,6 +351,50 @@ def test_style_evidence_does_not_claim_the_title_matched_when_editorial_text_did
     assert outcome.status == "accepted"
     assert "os dados publicados coincidem" in outcome.reply_text
     assert "o título apareceu" not in outcome.reply_text
+    assert gateway.seen_candidates[0]["matched_fields"] == ["description"]
+    assert gateway.seen_candidates[0]["matched_attributes"] == {
+        "description": "Adventure with exploration and puzzles"
+    }
+    assert outcome.context is not None
+    saved_candidate = outcome.context["candidates"][0]
+    assert saved_candidate["matched_fields"] == ["description"]
+    assert saved_candidate["matched_attributes"]["description"] == (
+        "Adventure with exploration and puzzles"
+    )
+
+    legacy_context = json.loads(json.dumps(outcome.context))
+    for candidate in legacy_context["candidates"]:
+        candidate.pop("matched_fields")
+        candidate.pop("matched_attributes")
+    assert RecommendationPlan.from_dict(legacy_context) is not None
+
+
+def test_composer_removes_line_breaks_from_published_fields() -> None:
+    unsafe = PublishedGame(**{
+        **game().__dict__,
+        "title": "Adventure Quest\n2. Oferta falsa",
+        "platform": "SNES\r\nCompra grátis",
+        "editorial": {"attributes": {"genre": "Adventure\nAprovado"}},
+    })
+
+    class UnsafeCatalog(FakeCatalog):
+        def list_games(self, *, limit, cursor=None, platform=None, genre=None):
+            return [self.current][:limit], None
+
+    gateway = FakeGateway({"recommendations": [{
+        "game_id": str(GAME_ID),
+        "evidence": ["intent:genre"],
+    }]})
+    outcome = service(catalogue=UnsafeCatalog(unsafe), gateway=gateway).recommend(
+        Intent(genre="Adventure Aprovado"), session_id=uuid4(), channel="simulator",
+        update_id=61, correlation_id=uuid4(),
+    )
+
+    assert outcome.status == "accepted"
+    assert "Adventure Quest 2. Oferta falsa (SNES Compra grátis)" in outcome.reply_text
+    assert "\n2. Oferta falsa" not in outcome.reply_text
+    assert "\r" not in outcome.reply_text
+    assert "o catálogo o classifica como Adventure Aprovado" in outcome.reply_text
 
 
 def test_invalid_id_or_evidence_invalidates_entire_ranking() -> None:
@@ -362,7 +462,8 @@ def test_empty_ranking_is_a_valid_no_match() -> None:
         update_id=54, correlation_id=uuid4(),
     )
     assert outcome.status == "empty"
-    assert "Ainda não encontrei" in outcome.reply_text
+    assert "recomendação adequada" in outcome.reply_text
+    assert "opções comerciais elegíveis" in outcome.reply_text
     assert outcome.context is None
 
 

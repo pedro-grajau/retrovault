@@ -2,8 +2,8 @@
 
 from alembic import op
 
-revision = "0020_concierge_outbox_recommendation_context"
-down_revision = "0019_concierge_ai_ledger_operations"
+revision = "0020_outbox_rec_context"
+down_revision = "0019_ai_ledger_ops"
 branch_labels = None
 depends_on = None
 
