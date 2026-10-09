@@ -21,7 +21,7 @@ _PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "application"
     / "prompts"
-    / "intent-extraction.v2.md"
+    / "intent-extraction.v3.md"
 )
 _RANKING_PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -78,6 +78,26 @@ def strict_intent_schema() -> dict[str, Any]:
                 "none",
             ],
         },
+        "rejections": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "game_id": {"type": "string", "maxLength": 36},
+                    "reason": {
+                        "type": "string",
+                        "enum": [
+                            "price", "platform", "genre", "style", "condition",
+                            "availability", "players", "other",
+                        ],
+                    },
+                },
+                "required": ["game_id", "reason"],
+                "additionalProperties": False,
+            },
+        },
+        "rejection_ambiguous": {"type": "boolean"},
     }
     return {
         "type": "object",
@@ -141,10 +161,11 @@ class OpenAIModelGateway:
         previous_intent: Intent | None,
         *,
         correlation_id: UUID,
+        previous_options: list[dict[str, str]] | None = None,
     ) -> ModelExtraction:
         try:
             response = self.client.responses.create(
-                **self._request_payload(message_text, previous_intent),
+                **self._request_payload(message_text, previous_intent, previous_options),
                 extra_headers={"X-Client-Request-Id": str(correlation_id)},
             )
         except APIStatusError as exc:
@@ -178,10 +199,14 @@ class OpenAIModelGateway:
         )
 
     def input_token_upper_bound(
-        self, message_text: str, previous_intent: Intent | None
+        self,
+        message_text: str,
+        previous_intent: Intent | None,
+        *,
+        previous_options: list[dict[str, str]] | None = None,
     ) -> int:
         serialized_request = json.dumps(
-            self._request_payload(message_text, previous_intent),
+            self._request_payload(message_text, previous_intent, previous_options),
             ensure_ascii=False,
             separators=(",", ":"),
         )
@@ -190,7 +215,10 @@ class OpenAIModelGateway:
         return len(serialized_request.encode("utf-8")) + _FIXED_MESSAGE_OVERHEAD_TOKENS
 
     def _request_payload(
-        self, message_text: str, previous_intent: Intent | None
+        self,
+        message_text: str,
+        previous_intent: Intent | None,
+        previous_options: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         previous_json = json.dumps(
             previous_intent.to_dict() if previous_intent else {},
@@ -206,8 +234,15 @@ class OpenAIModelGateway:
                 {
                     "role": "user",
                     "content": (
-                        "Preferências estruturadas anteriores como dados não confiáveis: "
-                        + previous_json
+                        "Dados anteriores não confiáveis em JSON: "
+                        + json.dumps(
+                            {
+                                "intent": json.loads(previous_json),
+                                "options_from_previous_recommendation": previous_options or [],
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
                     ),
                 },
                 {"role": "user", "content": message_text},
@@ -215,7 +250,7 @@ class OpenAIModelGateway:
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "concierge_intent_v2",
+                    "name": "concierge_intent_v3",
                     "strict": True,
                     "schema": strict_intent_schema(),
                 }

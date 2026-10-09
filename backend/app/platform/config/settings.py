@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     pixel_telegram_webhook_max_body_bytes: int = Field(default=65536, ge=1024, le=1048576)
     pixel_telegram_message_max_age_seconds: int = Field(default=900, ge=60, le=3600)
     pixel_telegram_retention_days: int = Field(default=30, ge=1, le=365)
+    pixel_max_failed_refinement_rounds: int = Field(default=3, ge=1, le=10)
     pixel_telegram_typing_threshold_seconds: float = Field(default=3.0, ge=0.1, le=30)
     pixel_context_reference_secret: SecretStr = Field(default=SecretStr(""))
     pixel_context_reference_ttl_seconds: int = Field(default=1800, ge=60, le=86400)

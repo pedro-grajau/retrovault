@@ -4,8 +4,8 @@
   "status": "active",
   "state": "intent",
   "version_key": "intent_version+source_update_id",
-  "workflow_version": "2.3.v1",
-  "prompt_version": "intent-extraction.v2",
+  "workflow_version": "2.4.v1",
+  "prompt_version": "intent-extraction.v3",
   "fields": {
     "platform": {"type": ["string", "null"], "max_length": 48},
     "genre": {"type": ["string", "null"], "max_length": 64},

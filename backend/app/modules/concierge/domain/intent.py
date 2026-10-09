@@ -9,10 +9,15 @@ from typing import Literal, cast
 from uuid import UUID
 
 INTENT_VERSION = "intent.v2"
-PROMPT_VERSION = "intent-extraction.v2"
+PROMPT_VERSION = "intent-extraction.v3"
+REFINEMENT_VERSION = "refinement.v1"
 GameMode = Literal["purchase", "rental"]
 IntentField = Literal["platform", "genre", "style", "players", "price_range"]
 ClarificationField = IntentField | Literal["none"]
+RejectionReason = Literal[
+    "price", "platform", "genre", "style", "condition", "availability",
+    "players", "other",
+]
 
 _INJECTION_MARKERS = re.compile(
     r"(?:ignore|disregard|desconsidere|esqueça).{0,80}"
@@ -20,6 +25,11 @@ _INJECTION_MARKERS = re.compile(
     r"(?:reveal|mostre|revele).{0,80}(?:prompt|instructions?|instruções|segredo)|"
     r"(?:jailbreak|bypass|override|modo desenvolvedor)",
     re.IGNORECASE | re.DOTALL,
+)
+_SENSITIVE_TEXT = re.compile(
+    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|"
+    r"(?<!\w)(?:\+?\d[\d().\- ]{7,}\d)(?!\w)",
+    re.IGNORECASE,
 )
 
 
@@ -131,6 +141,8 @@ class IntentPayload:
 @dataclass(frozen=True)
 class IntentExtractionPayload(IntentPayload):
     clarification_field: ClarificationField
+    rejections: tuple[IntentRejection, ...]
+    rejection_ambiguous: bool
 
     @classmethod
     def from_json(cls, value: str) -> IntentExtractionPayload:
@@ -138,7 +150,7 @@ class IntentExtractionPayload(IntentPayload):
         if type(payload) is not dict:
             raise ValueError("invalid_intent_extraction_fields")
         payload_values = cast(dict[str, object], payload)
-        if set(payload_values) != {
+        legacy_fields = {
             "platform",
             "genre",
             "style",
@@ -149,17 +161,50 @@ class IntentExtractionPayload(IntentPayload):
             "mode",
             "mode_cleared",
             "clarification_field",
+        }
+        current_fields = legacy_fields | {"rejections", "rejection_ambiguous"}
+        if frozenset(payload_values) not in {
+            frozenset(legacy_fields), frozenset(current_fields)
         }:
             raise ValueError("invalid_intent_extraction_fields")
         clarification = payload_values["clarification_field"]
         if clarification not in ("platform", "genre", "style", "players", "price_range", "none"):
             raise ValueError("invalid_clarification_field")
         clarification_field = cast(ClarificationField, clarification)
+        rejection_ambiguous = payload_values.get("rejection_ambiguous", False)
+        if type(rejection_ambiguous) is not bool:
+            raise ValueError("invalid_rejection_ambiguity")
+        raw_rejections = payload_values.get("rejections", [])
+        if type(raw_rejections) is not list or len(raw_rejections) > 3:
+            raise ValueError("invalid_rejections")
+        rejections: list[IntentRejection] = []
+        for item in raw_rejections:
+            if type(item) is not dict or set(item) != {"game_id", "reason"}:
+                raise ValueError("invalid_rejection")
+            try:
+                game_id = UUID(item["game_id"])
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError("invalid_rejection_id") from exc
+            if str(game_id) != item["game_id"]:
+                raise ValueError("invalid_rejection_id")
+            reason = item["reason"]
+            if reason not in {
+                "price", "platform", "genre", "style", "condition",
+                "availability", "players", "other",
+            }:
+                raise ValueError("invalid_rejection_reason")
+            rejections.append(IntentRejection(game_id, cast(RejectionReason, reason)))
+        if len({item.game_id for item in rejections}) != len(rejections):
+            raise ValueError("duplicate_rejection_id")
+        if rejection_ambiguous and rejections:
+            raise ValueError("ambiguous_rejection_has_targets")
         intent = IntentPayload.from_mapping(
             {
                 key: payload_values[key]
                 for key in payload_values
-                if key != "clarification_field"
+                if key not in {
+                    "clarification_field", "rejections", "rejection_ambiguous"
+                }
             }
         )
         return cls(
@@ -173,7 +218,20 @@ class IntentExtractionPayload(IntentPayload):
             intent.mode,
             intent.mode_cleared,
             clarification_field,
+            tuple(rejections),
+            rejection_ambiguous,
         )
+
+
+@dataclass(frozen=True)
+class IntentRejection:
+    """A normalized rejection tied to one option from the preceding round."""
+
+    game_id: UUID
+    reason: RejectionReason
+
+    def to_dict(self) -> dict[str, str]:
+        return {"game_id": str(self.game_id), "reason": self.reason}
 
 
 def _optional_text(value: object, *, max_length: int) -> str | None:
@@ -181,9 +239,18 @@ def _optional_text(value: object, *, max_length: int) -> str | None:
         return None
     if type(value) is not str or len(value) > max_length:
         raise ValueError("invalid_intent_text")
-    if not value.strip() or any(ord(character) < 32 for character in value):
+    if (
+        not value.strip()
+        or any(ord(character) < 32 for character in value)
+        or _SENSITIVE_TEXT.search(value) is not None
+    ):
         raise ValueError("invalid_intent_text")
     return value
+
+
+def redact_sensitive_text(value: str) -> str:
+    """Remove email addresses and phone-like values from published text."""
+    return _SENSITIVE_TEXT.sub("[redigido]", value)
 
 
 def _optional_integer(

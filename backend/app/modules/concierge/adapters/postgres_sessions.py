@@ -18,13 +18,16 @@ from sqlalchemy import Connection, Engine, make_url, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.modules.concierge.domain.recommendation import (
+    restore_legacy_presented_game_ids,
+)
 from app.modules.concierge.domain.session import (
     IncomingMessage,
     MessageClaim,
     OutboxReply,
 )
 
-WORKFLOW_VERSION = "2.3.v1"
+WORKFLOW_VERSION = "2.4.v1"
 
 
 class SessionsUnavailable(RuntimeError):
@@ -524,6 +527,33 @@ class PostgresSessionRepository:
                             else None
                         ),
                     },
+                )
+        except SQLAlchemyError as exc:
+            raise SessionsUnavailable("concierge_session_storage_unavailable") from exc
+
+    def latest_delivered_recommendation(
+        self, session_id: UUID
+    ) -> dict[str, object] | None:
+        try:
+            with self.engine.connect() as connection:
+                row = connection.execute(
+                    text("""
+                        SELECT recommendation_context, text
+                        FROM concierge.outbox
+                        WHERE session_id = :session_id
+                          AND status = 'delivered'
+                          AND recommendation_context IS NOT NULL
+                        ORDER BY delivered_at DESC, created_at DESC
+                        LIMIT 1
+                    """),
+                    {"session_id": session_id},
+                ).mappings().first()
+                if row is None:
+                    return None
+                value = row["recommendation_context"]
+                return restore_legacy_presented_game_ids(
+                    value,
+                    row["text"] if isinstance(row["text"], str) else "",
                 )
         except SQLAlchemyError as exc:
             raise SessionsUnavailable("concierge_session_storage_unavailable") from exc

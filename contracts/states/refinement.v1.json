@@ -1,0 +1,31 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "state": "recommendation-refinement",
+  "version_key": "refinement_version+source_update_id",
+  "feedback": {
+    "rejection_ids_must_belong_to_previous_recommendation": true,
+    "previous_recommendation_source": "latest-delivered-context-presented-game-ids",
+    "maximum_rejections_per_round": 3,
+    "normalized_reasons": ["price", "platform", "genre", "style", "condition", "availability", "players", "other"],
+    "evidence_fields": ["game_id", "reason", "source_update_id", "recommendation_update_id", "correlation_id"],
+    "ambiguous_target_requires_short_clarification": true,
+    "generic_criticism_changes_commercial_preferences": false
+  },
+  "intent_revisions": {
+    "versioned": true,
+    "append_only": true,
+    "fields": ["revision", "intent_version", "intent", "changed_fields", "source_update_id", "correlation_id"]
+  },
+  "attempts": {
+    "pending_refinement_survives_clarification_and_transport_fallback": true,
+    "count_failed_refinement_rounds_only": true,
+    "transport_failures_count": false,
+    "update_retries_count": false,
+    "excluded_game_ids_before_ranking": true,
+    "maximum_revalidated_alternatives": 3
+  },
+  "raw_message_retained": false,
+  "pii_retained": false
+}
