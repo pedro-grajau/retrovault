@@ -18,8 +18,10 @@ from app.modules.concierge.domain.intent import (
     Intent,
     IntentExtractionPayload,
     IntentProvenance,
+    IntentRejection,
     is_prompt_injection,
     merge_intent,
+    redact_sensitive_text,
 )
 from app.modules.concierge.ports.ai_ledger import AiLedger
 from app.modules.concierge.ports.models import ModelCallFailure, ModelGateway
@@ -34,6 +36,9 @@ class IntentDecision:
     intent: Intent
     clarification_field: str
     provenance: IntentProvenance
+    rejections: tuple[IntentRejection, ...] = ()
+    rejection_ambiguous: bool = False
+    price_range_updated: bool = False
 
 
 class IntentExtractionService:
@@ -63,6 +68,7 @@ class IntentExtractionService:
         channel: str,
         update_id: int,
         correlation_id: UUID,
+        previous_options: list[dict[str, str]] | None = None,
         now: datetime | None = None,
     ) -> IntentDecision:
         current = now or datetime.now(UTC)
@@ -74,6 +80,9 @@ class IntentExtractionService:
             return self._decision(
                 "injection", prior, "none", update_id, correlation_id, safety
             )
+        safe_previous_options = self._validated_previous_options(previous_options)
+        if previous_options is not None and safe_previous_options is None:
+            return self._fallback(prior, update_id, correlation_id, safety)
         if (
             self.gateway is None
             or self.ledger is None
@@ -83,9 +92,14 @@ class IntentExtractionService:
             return self._fallback(prior, update_id, correlation_id, safety)
 
         try:
-            input_upper_bound = self.gateway.input_token_upper_bound(
-                message_text, prior
-            )
+            if safe_previous_options is None:
+                input_upper_bound = self.gateway.input_token_upper_bound(
+                    message_text, prior
+                )
+            else:
+                input_upper_bound = self.gateway.input_token_upper_bound(
+                    message_text, prior, previous_options=safe_previous_options
+                )
         except Exception:
             return self._fallback(prior, update_id, correlation_id, safety)
         if (
@@ -125,9 +139,17 @@ class IntentExtractionService:
             return self._fallback(prior, update_id, correlation_id, safety)
 
         try:
-            result = self.gateway.extract_intent(
-                message_text, prior, correlation_id=correlation_id
-            )
+            if safe_previous_options is None:
+                result = self.gateway.extract_intent(
+                    message_text, prior, correlation_id=correlation_id
+                )
+            else:
+                result = self.gateway.extract_intent(
+                    message_text,
+                    prior,
+                    correlation_id=correlation_id,
+                    previous_options=safe_previous_options,
+                )
         except ModelCallFailure as exc:
             if exc.conclusive:
                 self._release(grant.reservation_id, current)
@@ -164,6 +186,14 @@ class IntentExtractionService:
             extracted = IntentExtractionPayload.from_json(result.output_json)
         except (ValueError, TypeError):
             return self._fallback(prior, update_id, correlation_id, safety)
+        allowed_ids = {
+            UUID(item["game_id"]) for item in safe_previous_options or []
+        }
+        if extracted.rejections and (
+            not allowed_ids
+            or any(item.game_id not in allowed_ids for item in extracted.rejections)
+        ):
+            return self._fallback(prior, update_id, correlation_id, safety)
         merged = merge_intent(prior, extracted)
         return self._decision(
             "accepted",
@@ -172,7 +202,47 @@ class IntentExtractionService:
             update_id,
             correlation_id,
             safety,
+            rejections=extracted.rejections,
+            rejection_ambiguous=extracted.rejection_ambiguous,
+            price_range_updated=(
+                extracted.price_min_brl_cents is not None
+                or extracted.price_max_brl_cents is not None
+                or "price_range" in extracted.cleared_fields
+            ),
         )
+
+    @staticmethod
+    def _validated_previous_options(
+        options: list[dict[str, str]] | None,
+    ) -> list[dict[str, str]] | None:
+        if options is None:
+            return None
+        if type(options) is not list or len(options) > 3:
+            return None
+        sanitized: list[dict[str, str]] = []
+        seen: set[UUID] = set()
+        for item in options:
+            if type(item) is not dict or set(item) != {"game_id", "title"}:
+                return None
+            try:
+                game_id = UUID(item["game_id"])
+            except (ValueError, TypeError, AttributeError):
+                return None
+            title = item["title"]
+            if type(title) is not str:
+                return None
+            title = redact_sensitive_text(title)
+            if (
+                str(game_id) != item["game_id"]
+                or game_id in seen
+                or not title
+                or len(title) > 200
+                or any(not character.isprintable() for character in title)
+            ):
+                return None
+            seen.add(game_id)
+            sanitized.append({"game_id": str(game_id), "title": title})
+        return sanitized
 
     def _release(self, reservation_id: UUID, now: datetime) -> None:
         ledger = self.ledger
@@ -202,6 +272,10 @@ class IntentExtractionService:
         update_id: int,
         correlation_id: UUID,
         safety: SafetyClassification,
+        *,
+        rejections: tuple[IntentRejection, ...] = (),
+        rejection_ambiguous: bool = False,
+        price_range_updated: bool = False,
     ) -> IntentDecision:
         provenance = IntentProvenance(
             intent_version=INTENT_VERSION,
@@ -212,4 +286,12 @@ class IntentExtractionService:
             correlation_id=correlation_id,
             safety_classification=safety,
         )
-        return IntentDecision(status, intent, clarification_field, provenance)
+        return IntentDecision(
+            status,
+            intent,
+            clarification_field,
+            provenance,
+            rejections,
+            rejection_ambiguous,
+            price_range_updated,
+        )

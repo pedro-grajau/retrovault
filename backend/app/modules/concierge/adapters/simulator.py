@@ -11,6 +11,9 @@ from threading import Lock
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
+from app.modules.concierge.domain.recommendation import (
+    restore_legacy_presented_game_ids,
+)
 from app.modules.concierge.domain.session import (
     IncomingMessage,
     MessageClaim,
@@ -219,6 +222,7 @@ class InMemorySessionStore:
                 "delivery_status": None,
                 "delivery_lease_token": None,
                 "delivery_lease_until": None,
+                "delivered_at": None,
             }
             return MessageClaim(
                 "claimed",
@@ -256,6 +260,35 @@ class InMemorySessionStore:
                 recommendation_context=recommendation_context,
                 workflow_version=workflow_version,
                 delivery_status="pending",
+            )
+
+    def latest_delivered_recommendation(
+        self, session_id: UUID
+    ) -> dict[str, object] | None:
+        with self._lock:
+            delivered = [
+                record
+                for record in self._messages.values()
+                if record.get("session_id") == session_id
+                and record.get("delivery_status") == "delivered"
+                and type(record.get("recommendation_context")) is dict
+            ]
+            if not delivered:
+                return None
+            minimum_time = datetime.min.replace(tzinfo=UTC)
+            delivered.sort(
+                key=lambda record: (
+                    record.get("delivered_at")
+                    if isinstance(record.get("delivered_at"), datetime)
+                    else record.get("received_at", minimum_time),
+                    record.get("received_at", minimum_time),
+                )
+            )
+            latest = delivered[-1]
+            reply = latest.get("reply")
+            return restore_legacy_presented_game_ids(
+                latest.get("recommendation_context"),
+                reply if isinstance(reply, str) else "",
             )
 
     def claim_reply(
@@ -361,6 +394,7 @@ class InMemorySessionStore:
             record["delivery_lease_token"] = None
             record["delivery_lease_until"] = None
             record["delivered"] = True
+            record["delivered_at"] = datetime.now(UTC)
             return True
 
     def release_reply(

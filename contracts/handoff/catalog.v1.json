@@ -9,5 +9,5 @@
   "empty_or_multiple_recipients": "disabled-without-selection",
   "forwards_conversation_history": false,
   "claims_session_assumption": false,
-  "contracts": ["request.v1.json"]
+  "contracts": ["request.v2.json"]
 }

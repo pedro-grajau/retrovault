@@ -9,10 +9,18 @@ from typing import Literal, cast
 from uuid import UUID
 
 INTENT_VERSION = "intent.v2"
-PROMPT_VERSION = "intent-extraction.v2"
+PROMPT_VERSION = "intent-extraction.v3"
+REFINEMENT_VERSION = "refinement.v1"
 GameMode = Literal["purchase", "rental"]
 IntentField = Literal["platform", "genre", "style", "players", "price_range"]
+ClearableIntentField = Literal[
+    "platform", "genre", "style", "players", "price_range", "constraints"
+]
 ClarificationField = IntentField | Literal["none"]
+RejectionReason = Literal[
+    "price", "platform", "genre", "style", "condition", "availability",
+    "players", "other",
+]
 
 _INJECTION_MARKERS = re.compile(
     r"(?:ignore|disregard|desconsidere|esqueça).{0,80}"
@@ -20,6 +28,11 @@ _INJECTION_MARKERS = re.compile(
     r"(?:reveal|mostre|revele).{0,80}(?:prompt|instructions?|instruções|segredo)|"
     r"(?:jailbreak|bypass|override|modo desenvolvedor)",
     re.IGNORECASE | re.DOTALL,
+)
+_SENSITIVE_TEXT = re.compile(
+    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|"
+    r"(?<!\w)(?:\+?\d[\d().\- ]{7,}\d)(?!\w)",
+    re.IGNORECASE,
 )
 
 
@@ -57,6 +70,25 @@ class Intent:
             # Checkpoints written before intent.v2 do not contain a mode.
             payload_value.setdefault("mode", None)
             payload_value.setdefault("mode_cleared", False)
+            # Clearing signals are transient extraction metadata, never persisted.
+            payload_value["cleared_fields"] = []
+            for field in ("platform", "genre", "style"):
+                field_value = payload_value.get(field)
+                if (
+                    isinstance(field_value, str)
+                    and _SENSITIVE_TEXT.search(field_value) is not None
+                ):
+                    payload_value[field] = None
+            raw_constraints = payload_value.get("constraints")
+            if isinstance(raw_constraints, (list, tuple)):
+                payload_value["constraints"] = [
+                    item
+                    for item in raw_constraints
+                    if not (
+                        isinstance(item, str)
+                        and _SENSITIVE_TEXT.search(item) is not None
+                    )
+                ]
             payload = IntentPayload.from_mapping(payload_value)
         except (TypeError, ValueError):
             return None
@@ -74,7 +106,7 @@ class Intent:
 
 @dataclass(frozen=True)
 class IntentPayload:
-    """Strict provider output for the six fields allowed by this story."""
+    """Strict provider output, including transient preference-clearing signals."""
 
     platform: str | None
     genre: str | None
@@ -85,6 +117,7 @@ class IntentPayload:
     constraints: tuple[str, ...]
     mode: GameMode | None
     mode_cleared: bool
+    cleared_fields: tuple[ClearableIntentField, ...]
 
     @classmethod
     def from_mapping(cls, value: object) -> IntentPayload:
@@ -101,6 +134,7 @@ class IntentPayload:
             "constraints",
             "mode",
             "mode_cleared",
+            "cleared_fields",
         }
         if set(values) != fields:
             raise ValueError("invalid_intent_fields")
@@ -123,14 +157,63 @@ class IntentPayload:
         mode_cleared = values["mode_cleared"]
         if type(mode_cleared) is not bool or (mode_cleared and mode is not None):
             raise ValueError("invalid_intent_mode_clear")
+        raw_cleared_fields = values["cleared_fields"]
+        allowed_cleared_fields = {
+            "platform",
+            "genre",
+            "style",
+            "players",
+            "price_range",
+            "constraints",
+        }
+        if (
+            type(raw_cleared_fields) is not list
+            or len(raw_cleared_fields) > len(allowed_cleared_fields)
+            or any(
+                type(item) is not str or item not in allowed_cleared_fields
+                for item in raw_cleared_fields
+            )
+            or len(set(raw_cleared_fields)) != len(raw_cleared_fields)
+        ):
+            raise ValueError("invalid_cleared_fields")
+        cleared_fields = cast(
+            tuple[ClearableIntentField, ...], tuple(raw_cleared_fields)
+        )
+        for field, field_value in (
+            ("platform", platform),
+            ("genre", genre),
+            ("style", style),
+            ("players", players),
+        ):
+            if field in cleared_fields and field_value is not None:
+                raise ValueError("conflicting_cleared_field_value")
+        if "price_range" in cleared_fields and (
+            minimum is not None or maximum is not None
+        ):
+            raise ValueError("conflicting_cleared_price_range")
+        if "constraints" in cleared_fields and constraints:
+            raise ValueError("conflicting_cleared_constraints")
         if minimum is not None and maximum is not None and minimum > maximum:
             raise ValueError("invalid_price_range")
-        return cls(platform, genre, style, players, minimum, maximum, constraints, mode, mode_cleared)
+        return cls(
+            platform,
+            genre,
+            style,
+            players,
+            minimum,
+            maximum,
+            constraints,
+            mode,
+            mode_cleared,
+            cleared_fields,
+        )
 
 
 @dataclass(frozen=True)
 class IntentExtractionPayload(IntentPayload):
     clarification_field: ClarificationField
+    rejections: tuple[IntentRejection, ...]
+    rejection_ambiguous: bool
 
     @classmethod
     def from_json(cls, value: str) -> IntentExtractionPayload:
@@ -138,7 +221,7 @@ class IntentExtractionPayload(IntentPayload):
         if type(payload) is not dict:
             raise ValueError("invalid_intent_extraction_fields")
         payload_values = cast(dict[str, object], payload)
-        if set(payload_values) != {
+        legacy_fields = {
             "platform",
             "genre",
             "style",
@@ -149,19 +232,60 @@ class IntentExtractionPayload(IntentPayload):
             "mode",
             "mode_cleared",
             "clarification_field",
+        }
+        current_fields = legacy_fields | {"rejections", "rejection_ambiguous"}
+        latest_fields = current_fields | {"cleared_fields"}
+        if frozenset(payload_values) not in {
+            frozenset(legacy_fields),
+            frozenset(current_fields),
+            frozenset(latest_fields),
         }:
             raise ValueError("invalid_intent_extraction_fields")
         clarification = payload_values["clarification_field"]
         if clarification not in ("platform", "genre", "style", "players", "price_range", "none"):
             raise ValueError("invalid_clarification_field")
         clarification_field = cast(ClarificationField, clarification)
-        intent = IntentPayload.from_mapping(
-            {
-                key: payload_values[key]
-                for key in payload_values
-                if key != "clarification_field"
+        rejection_ambiguous = payload_values.get("rejection_ambiguous", False)
+        if type(rejection_ambiguous) is not bool:
+            raise ValueError("invalid_rejection_ambiguity")
+        raw_rejections = payload_values.get("rejections", [])
+        if type(raw_rejections) is not list or len(raw_rejections) > 3:
+            raise ValueError("invalid_rejections")
+        rejections: list[IntentRejection] = []
+        for item in raw_rejections:
+            if type(item) is not dict or set(item) != {"game_id", "reason"}:
+                raise ValueError("invalid_rejection")
+            item = cast(dict[str, object], item)
+            raw_game_id = item["game_id"]
+            if not isinstance(raw_game_id, str):
+                raise ValueError("invalid_rejection_id")
+            try:
+                game_id = UUID(raw_game_id)
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError("invalid_rejection_id") from exc
+            if str(game_id) != item["game_id"]:
+                raise ValueError("invalid_rejection_id")
+            reason = item["reason"]
+            if reason not in {
+                "price", "platform", "genre", "style", "condition",
+                "availability", "players", "other",
+            }:
+                raise ValueError("invalid_rejection_reason")
+            rejections.append(IntentRejection(game_id, cast(RejectionReason, reason)))
+        if len({item.game_id for item in rejections}) != len(rejections):
+            raise ValueError("duplicate_rejection_id")
+        if rejection_ambiguous and rejections:
+            raise ValueError("ambiguous_rejection_has_targets")
+        intent_values = {
+            key: payload_values[key]
+            for key in payload_values
+            if key not in {
+                "clarification_field", "rejections", "rejection_ambiguous"
             }
-        )
+        }
+        # Accept the prior v3 response shape during a rolling provider rollout.
+        intent_values.setdefault("cleared_fields", [])
+        intent = IntentPayload.from_mapping(intent_values)
         return cls(
             intent.platform,
             intent.genre,
@@ -172,8 +296,22 @@ class IntentExtractionPayload(IntentPayload):
             intent.constraints,
             intent.mode,
             intent.mode_cleared,
+            intent.cleared_fields,
             clarification_field,
+            tuple(rejections),
+            rejection_ambiguous,
         )
+
+
+@dataclass(frozen=True)
+class IntentRejection:
+    """A normalized rejection tied to one option from the preceding round."""
+
+    game_id: UUID
+    reason: RejectionReason
+
+    def to_dict(self) -> dict[str, str]:
+        return {"game_id": str(self.game_id), "reason": self.reason}
 
 
 def _optional_text(value: object, *, max_length: int) -> str | None:
@@ -181,9 +319,18 @@ def _optional_text(value: object, *, max_length: int) -> str | None:
         return None
     if type(value) is not str or len(value) > max_length:
         raise ValueError("invalid_intent_text")
-    if not value.strip() or any(ord(character) < 32 for character in value):
+    if (
+        not value.strip()
+        or any(ord(character) < 32 for character in value)
+        or _SENSITIVE_TEXT.search(value) is not None
+    ):
         raise ValueError("invalid_intent_text")
     return value
+
+
+def redact_sensitive_text(value: str) -> str:
+    """Remove email addresses and phone-like values from published text."""
+    return _SENSITIVE_TEXT.sub("[redigido]", value)
 
 
 def _optional_integer(
@@ -235,16 +382,18 @@ def merge_intent(previous: Intent | None, extracted: IntentPayload) -> Intent:
     """Apply only non-null preferences and retain earlier explicit preferences."""
 
     previous = previous or Intent()
+    cleared = set(extracted.cleared_fields)
     constraints = list(extracted.constraints)
-    for item in previous.constraints:
-        if item not in constraints:
-            constraints.append(item)
-    minimum = (
+    if "constraints" not in cleared:
+        for item in previous.constraints:
+            if item not in constraints:
+                constraints.append(item)
+    minimum = None if "price_range" in cleared else (
         extracted.price_min_brl_cents
         if extracted.price_min_brl_cents is not None
         else previous.price_min_brl_cents
     )
-    maximum = (
+    maximum = None if "price_range" in cleared else (
         extracted.price_max_brl_cents
         if extracted.price_max_brl_cents is not None
         else previous.price_max_brl_cents
@@ -264,10 +413,18 @@ def merge_intent(previous: Intent | None, extracted: IntentPayload) -> Intent:
     ):
         minimum = None
     return Intent(
-        platform=extracted.platform or previous.platform,
-        genre=extracted.genre or previous.genre,
-        style=extracted.style or previous.style,
-        players=extracted.players or previous.players,
+        platform=(
+            None if "platform" in cleared else extracted.platform or previous.platform
+        ),
+        genre=(
+            None if "genre" in cleared else extracted.genre or previous.genre
+        ),
+        style=(
+            None if "style" in cleared else extracted.style or previous.style
+        ),
+        players=(
+            None if "players" in cleared else extracted.players or previous.players
+        ),
         price_min_brl_cents=minimum,
         price_max_brl_cents=maximum,
         constraints=tuple(constraints[:5]),
@@ -279,8 +436,10 @@ def is_prompt_injection(text: str) -> bool:
     return _INJECTION_MARKERS.search(text) is not None
 
 
-def clarification_question(field: ClarificationField, intent: Intent) -> str | None:
-    """Render one fixed question, and only when its material field is absent."""
+def clarification_question(
+    field: ClarificationField, intent: Intent, *, force: bool = False
+) -> str | None:
+    """Render a fixed question when a field is absent or explicitly forced."""
 
     missing = {
         "platform": intent.platform is None,
@@ -292,7 +451,7 @@ def clarification_question(field: ClarificationField, intent: Intent) -> str | N
             and intent.price_max_brl_cents is None
         ),
     }
-    if field == "none" or not missing[field]:
+    if field == "none" or (not force and not missing[field]):
         return None
     return {
         "platform": "Em qual plataforma você quer jogar?",

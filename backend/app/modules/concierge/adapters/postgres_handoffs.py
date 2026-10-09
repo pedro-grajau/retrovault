@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -26,6 +27,7 @@ class PostgresHandoffRepository(HandoffStore):
         correlation_id: UUID,
         target_chat_id: str,
         notification_text: str,
+        context_snapshot: dict[str, object] | None = None,
         now: datetime,
     ) -> bool:
         if not target_chat_id.isascii() or not target_chat_id.isdigit():
@@ -37,10 +39,11 @@ class PostgresHandoffRepository(HandoffStore):
                     text("""
                         INSERT INTO concierge.handoff_requests (
                             id, session_id, channel, external_update_id,
-                            correlation_id, status, requested_at
+                            correlation_id, status, requested_at, context_snapshot
                         ) VALUES (
                             :id, :session_id, :channel, :update_id,
-                            :correlation_id, 'requested', :now
+                            :correlation_id, 'requested', :now,
+                            CAST(:context_snapshot AS jsonb)
                         ) ON CONFLICT (channel, external_update_id) DO NOTHING
                         RETURNING id
                     """),
@@ -51,6 +54,11 @@ class PostgresHandoffRepository(HandoffStore):
                         "update_id": update_id,
                         "correlation_id": correlation_id,
                         "now": now,
+                        "context_snapshot": (
+                            json.dumps(context_snapshot, ensure_ascii=False)
+                            if context_snapshot is not None
+                            else None
+                        ),
                     },
                 ).scalar_one_or_none()
                 if inserted is None:

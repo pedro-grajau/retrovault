@@ -78,6 +78,7 @@ def configure_services(
     message_max_age_seconds: int = 900,
     retention_days: int = 30,
     typing_threshold_seconds: float = 3.0,
+    max_failed_refinement_rounds: int = 3,
 ) -> None:
     global _context_references, _telegram_bot_username, _session_store
     global _session_workflow, _handoff_service, _telegram_messenger, _telegram_updates, _webhook_secret
@@ -101,6 +102,7 @@ def configure_services(
             recommendations=recommendation_service,
             handoff_service=_handoff_service,
             max_message_age_seconds=message_max_age_seconds,
+            max_failed_refinement_rounds=max_failed_refinement_rounds,
         )
         if session_store is not None and checkpointer_factory is not None
         else None

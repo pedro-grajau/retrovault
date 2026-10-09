@@ -28,21 +28,27 @@ from app.modules.concierge.application.intent_extraction import (
 from app.modules.concierge.domain.intent import (
     INTENT_VERSION,
     PROMPT_VERSION,
+    REFINEMENT_VERSION,
     Intent,
     IntentProvenance,
     clarification_question,
     is_prompt_injection,
+    redact_sensitive_text,
 )
+from app.modules.concierge.domain.recommendation import RecommendationPlan
 from app.modules.concierge.domain.session import (
     MAX_OUTBOX_TEXT_CHARS,
     IncomingMessage,
     OutboxReply,
     ProcessingResult,
 )
-from app.modules.concierge.ports.recommendations import Recommendations
+from app.modules.concierge.ports.recommendations import (
+    RecommendationOutcome,
+    Recommendations,
+)
 from app.modules.concierge.ports.sessions import SessionStore
 
-WORKFLOW_VERSION = "2.3.v1"
+WORKFLOW_VERSION = "2.4.v1"
 _START_COMMAND = re.compile(
     r"^/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$",
     re.IGNORECASE,
@@ -72,8 +78,13 @@ class SessionState(TypedDict):
     intent_provenance: NotRequired[dict[str, object]]
     extraction_status: NotRequired[str]
     clarification_field: NotRequired[str]
+    force_clarification: NotRequired[bool]
     prepared_recommendation: NotRequired[dict[str, object] | None]
+    prepared_refinement_state: NotRequired[dict[str, object]]
     recommendation_context: NotRequired[dict[str, object] | None]
+    last_recommendation_context: NotRequired[dict[str, object] | None]
+    refinement_state: NotRequired[dict[str, object]]
+    rejection_ambiguous: NotRequired[bool]
     context_game_id: NotRequired[str | None]
     greeting_sent: NotRequired[bool]
     last_processed_update_id: NotRequired[int]
@@ -138,19 +149,28 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         )
     elif state.get("extraction_status") == "accepted":
         recommendation = state.get("prepared_recommendation")
-        if isinstance(recommendation, dict) and isinstance(
+        if state.get("rejection_ambiguous"):
+            reply = (
+                "Quais opções você quer recusar? Pode me dizer o título ou o número "
+                "que apareceu na lista."
+            )
+        elif isinstance(recommendation, dict) and isinstance(
             recommendation.get("reply_text"), str
         ):
             reply = cast(str, recommendation["reply_text"])
             context = recommendation.get("context")
             updates_context = (
-                cast(dict[str, object], context) if isinstance(context, dict) else None
+                cast(dict[str, object], context)
+                if recommendation.get("status") == "accepted" and isinstance(context, dict)
+                else None
             )
         else:
             intent_value = state.get("prepared_intent")
             current_intent = Intent.from_dict(intent_value) or Intent()
             clarification = clarification_question(
-                cast(Any, state.get("clarification_field", "none")), current_intent
+                cast(Any, state.get("clarification_field", "none")),
+                current_intent,
+                force=bool(state.get("force_clarification")),
             )
             reply = (
                 clarification
@@ -198,6 +218,8 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         updates["intent"] = state["prepared_intent"]
     if "prepared_provenance" in state:
         updates["intent_provenance"] = state["prepared_provenance"]
+    if "prepared_refinement_state" in state:
+        updates["refinement_state"] = state["prepared_refinement_state"]
     return updates
 
 
@@ -211,6 +233,70 @@ def build_session_graph(
     return builder.compile(checkpointer=checkpointer)
 
 
+def _new_refinement_state() -> dict[str, object]:
+    return {
+        "version": REFINEMENT_VERSION,
+        "failed_rounds": 0,
+        "pending_refinement": False,
+        "rejected_options": [],
+        "considered_options": [],
+        "intent_revisions": [],
+    }
+
+
+def _restore_refinement_state(value: object) -> dict[str, object]:
+    if type(value) is not dict:
+        return _new_refinement_state()
+    raw = cast(dict[str, object], value)
+    if (
+        raw.get("version") != REFINEMENT_VERSION
+        or type(raw.get("failed_rounds")) is not int
+        or cast(int, raw["failed_rounds"]) < 0
+        or type(raw.get("pending_refinement")) is not bool
+        or type(raw.get("rejected_options")) is not list
+        or type(raw.get("considered_options")) is not list
+        or type(raw.get("intent_revisions")) is not list
+    ):
+        return _new_refinement_state()
+    return {
+        "version": REFINEMENT_VERSION,
+        "failed_rounds": raw["failed_rounds"],
+        "pending_refinement": raw["pending_refinement"],
+        "rejected_options": list(cast(list[object], raw["rejected_options"])),
+        "considered_options": list(cast(list[object], raw["considered_options"])),
+        "intent_revisions": list(cast(list[object], raw["intent_revisions"])),
+    }
+
+
+def _previous_options(context: object) -> list[dict[str, str]] | None:
+    plan = RecommendationPlan.from_dict(context)
+    if plan is None or not plan.presented_game_ids:
+        return None
+    candidates = {candidate.game_id: candidate for candidate in plan.candidates}
+    presented_ids = set(plan.presented_game_ids)
+    result: list[dict[str, str]] = []
+    for ranked in plan.ranking:
+        if ranked.game_id not in presented_ids:
+            continue
+        candidate = candidates.get(ranked.game_id)
+        if candidate is not None:
+            result.append(
+                {
+                    "game_id": str(candidate.game_id),
+                    "title": redact_sensitive_text(candidate.title),
+                }
+            )
+    return result or None
+
+
+def _changed_fields(previous: Intent, current: Intent) -> list[str]:
+    return [
+        key
+        for key, value in current.to_dict().items()
+        if previous.to_dict().get(key) != value
+    ]
+
+
 class SessionWorkflow:
     def __init__(
         self,
@@ -222,6 +308,7 @@ class SessionWorkflow:
         recommendations: Recommendations | None = None,
         handoff_service: HandoffService | None = None,
         max_message_age_seconds: int = 900,
+        max_failed_refinement_rounds: int = 3,
     ) -> None:
         self.store = store
         self.context_references = context_references
@@ -230,6 +317,7 @@ class SessionWorkflow:
         self.recommendations = recommendations
         self.handoff_service = handoff_service
         self.max_message_age_seconds = max_message_age_seconds
+        self.max_failed_refinement_rounds = max_failed_refinement_rounds
 
     def handle(self, message: IncomingMessage) -> ProcessingResult:
         now = datetime.now(UTC)
@@ -329,13 +417,30 @@ class SessionWorkflow:
                     prior_state.get("last_processed_update_id") == message.update_id
                 )
                 prior_intent = Intent.from_dict(prior_state.get("intent")) or Intent()
+                # Rewriting the safe canonical form also replaces legacy checkpoints
+                # whose individual fields contained sensitive text.
+                initial_state["prepared_intent"] = prior_intent.to_dict()
+                refinement = _restore_refinement_state(
+                    prior_state.get("refinement_state")
+                )
+                prior_recommendation = self.store.latest_delivered_recommendation(
+                    claim.session_id
+                )
+                previous_options = _previous_options(prior_recommendation)
+                initial_state["last_recommendation_context"] = prior_recommendation
                 if not already_processed and command == "handoff":
+                    if isinstance(prior_recommendation, dict):
+                        self._record_considered_options(refinement, prior_recommendation)
+                    initial_state["prepared_refinement_state"] = refinement
                     handoff = (
                         self.handoff_service.request(
                             session_id=claim.session_id,
                             channel=message.channel,
                             update_id=message.update_id,
                             correlation_id=message.correlation_id,
+                            context_snapshot=self._handoff_context(
+                                prior_intent, refinement, message.correlation_id
+                            ),
                         )
                         if self.handoff_service is not None
                         else None
@@ -352,15 +457,97 @@ class SessionWorkflow:
                         message,
                         claim.session_id,
                         prior_intent,
+                        previous_options=previous_options,
                     )
+                    allowed_rejections = {
+                        item["game_id"] for item in previous_options or []
+                    }
+                    invalid_rejection = any(
+                        str(item.game_id) not in allowed_rejections
+                        for item in decision.rejections
+                    )
+                    if invalid_rejection or (
+                        (decision.rejections or decision.rejection_ambiguous)
+                        and not previous_options
+                    ):
+                        decision = replace(
+                            decision,
+                            status="fallback",
+                            intent=prior_intent,
+                            rejections=(),
+                            rejection_ambiguous=False,
+                        )
                     initial_state["prepared_intent"] = decision.intent.to_dict()
                     initial_state["prepared_provenance"] = decision.provenance.to_dict()
                     initial_state["extraction_status"] = decision.status
-                    initial_state["clarification_field"] = decision.clarification_field
-                    if decision.status == "accepted" and self.recommendations is not None:
+                    price_rejection_needs_range = (
+                        decision.status == "accepted"
+                        and any(item.reason == "price" for item in decision.rejections)
+                        and not decision.price_range_updated
+                    )
+                    initial_state["clarification_field"] = (
+                        "price_range"
+                        if price_rejection_needs_range
+                        else decision.clarification_field
+                    )
+                    initial_state["force_clarification"] = price_rejection_needs_range
+                    initial_state["rejection_ambiguous"] = decision.rejection_ambiguous
+                    current_refinement = _restore_refinement_state(refinement)
+                    if isinstance(prior_recommendation, dict):
+                        self._record_considered_options(
+                            current_refinement, prior_recommendation
+                        )
+                    changed = _changed_fields(prior_intent, decision.intent)
+                    if changed:
+                        revisions = cast(list[object], current_refinement["intent_revisions"])
+                        revisions.append(
+                            {
+                                "revision": len(revisions) + 1,
+                                "intent_version": INTENT_VERSION,
+                                "intent": decision.intent.to_dict(),
+                                "changed_fields": changed,
+                                "source_update_id": message.update_id,
+                                "correlation_id": str(message.correlation_id),
+                                "provenance": decision.provenance.to_dict(),
+                            }
+                        )
+                    presented = {
+                        item["game_id"]: item["title"]
+                        for item in previous_options or []
+                    }
+                    prior_plan = RecommendationPlan.from_dict(prior_recommendation)
+                    recommendation_update_id = (
+                        prior_plan.provenance.source_update_id
+                        if prior_plan is not None
+                        else message.update_id
+                    )
+                    rejected_history = cast(
+                        list[object], current_refinement["rejected_options"]
+                    )
+                    for rejection in decision.rejections:
+                        rejected_history.append(
+                            {
+                                "game_id": str(rejection.game_id),
+                                "title": presented[str(rejection.game_id)],
+                                "reason": rejection.reason,
+                                "source_update_id": message.update_id,
+                                "recommendation_update_id": recommendation_update_id,
+                                "correlation_id": str(message.correlation_id),
+                            }
+                        )
+                    if decision.rejections:
+                        current_refinement["pending_refinement"] = True
+                    initial_state["prepared_refinement_state"] = current_refinement
+                    if (
+                        decision.status == "accepted"
+                        and not decision.rejection_ambiguous
+                        and self.recommendations is not None
+                    ):
                         current_intent = decision.intent
                         clarification = clarification_question(
-                            cast(Any, decision.clarification_field), current_intent
+                            cast(Any, initial_state["clarification_field"]),
+                            current_intent,
+                            force=price_rejection_needs_range,
                         )
                         if clarification is None:
                             outcome = self.recommendations.recommend(
@@ -369,15 +556,82 @@ class SessionWorkflow:
                                 channel=message.channel,
                                 update_id=message.update_id,
                                 correlation_id=message.correlation_id,
+                                excluded_game_ids=self._excluded_ids(current_refinement),
+                                previous_recommendation=prior_recommendation,
                             )
-                            if outcome.context is not None:
-                                outcome.context["greeting_required"] = not bool(
+                            is_refinement_failure = bool(
+                                current_refinement["pending_refinement"]
+                            ) and (
+                                outcome.status == "empty"
+                                or bool(
+                                    isinstance(outcome.context, dict)
+                                    and outcome.context.get("reused_previous_options") is True
+                                )
+                            )
+                            if is_refinement_failure:
+                                current_refinement["failed_rounds"] = (
+                                    cast(int, current_refinement["failed_rounds"]) + 1
+                                )
+                                current_refinement["pending_refinement"] = False
+                            elif outcome.status == "accepted":
+                                current_refinement["failed_rounds"] = 0
+                                current_refinement["pending_refinement"] = False
+                            outcome_recommendation = outcome
+                            if (
+                                is_refinement_failure
+                                and cast(int, current_refinement["failed_rounds"])
+                                >= self.max_failed_refinement_rounds
+                            ):
+                                handoff_context = self._handoff_context(
+                                    decision.intent,
+                                    current_refinement,
+                                    message.correlation_id,
+                                )
+                                handoff = (
+                                    self.handoff_service.request(
+                                        session_id=claim.session_id,
+                                        channel=message.channel,
+                                        update_id=message.update_id,
+                                        correlation_id=message.correlation_id,
+                                        context_snapshot=handoff_context,
+                                    )
+                                    if self.handoff_service is not None
+                                    else None
+                                )
+                                if handoff is not None and handoff.status == "registered":
+                                    handoff_reply = (
+                                        "Não encontrei uma alternativa adequada sem repetir as opções já vistas. "
+                                        "Registrei o contexto para revisão humana no Sandbox; você não precisa "
+                                        "repetir o que já informou."
+                                    )
+                                else:
+                                    handoff_reply = (
+                                        "Não encontrei uma alternativa adequada sem repetir as opções já vistas. "
+                                        "Não consegui registrar a revisão humana agora. Você pode tentar /humano."
+                                    )
+                                outcome_recommendation = RecommendationOutcome(
+                                    "empty", handoff_reply, None
+                                )
+                            if (
+                                outcome_recommendation.status == "accepted"
+                                and isinstance(outcome_recommendation.context, dict)
+                            ):
+                                self._record_considered_options(
+                                    current_refinement,
+                                    outcome_recommendation.context,
+                                )
+                            initial_state["prepared_refinement_state"] = current_refinement
+                            if (
+                                outcome_recommendation.status == "accepted"
+                                and isinstance(outcome_recommendation.context, dict)
+                            ):
+                                outcome_recommendation.context["greeting_required"] = not bool(
                                     prior_state.get("greeting_sent")
                                 )
                             initial_state["prepared_recommendation"] = {
-                                "status": outcome.status,
-                                "reply_text": outcome.reply_text,
-                                "context": outcome.context,
+                                "status": outcome_recommendation.status,
+                                "reply_text": outcome_recommendation.reply_text,
+                                "context": outcome_recommendation.context,
                             }
                 state = graph.invoke(
                     initial_state,
@@ -401,10 +655,118 @@ class SessionWorkflow:
             )
         return ProcessingResult("claimed", claim.session_id, reply_text)
 
+    @staticmethod
+    def _record_considered_options(
+        refinement: dict[str, object], context: dict[str, object]
+    ) -> None:
+        plan = RecommendationPlan.from_dict(context)
+        if plan is None or not plan.presented_game_ids:
+            return
+        considered = cast(list[object], refinement["considered_options"])
+        candidates = {item.game_id: item for item in plan.candidates}
+        presented_ids = set(plan.presented_game_ids)
+        for ranked in plan.ranking:
+            if ranked.game_id not in presented_ids:
+                continue
+            candidate = candidates.get(ranked.game_id)
+            if candidate is None:
+                continue
+            game_id = str(candidate.game_id)
+            considered[:] = [
+                item
+                for item in considered
+                if not (type(item) is dict and item.get("game_id") == game_id)
+            ]
+            considered.append(
+                {
+                    "game_id": game_id,
+                    "title": redact_sensitive_text(candidate.title),
+                }
+            )
+            if len(considered) > 100:
+                del considered[:-100]
+
+    @staticmethod
+    def _excluded_ids(refinement: dict[str, object]) -> tuple[UUID, ...]:
+        result: list[UUID] = []
+        seen: set[UUID] = set()
+        for item in cast(list[object], refinement["rejected_options"]):
+            if type(item) is not dict or not isinstance(item.get("game_id"), str):
+                continue
+            item = cast(dict[str, object], item)
+            raw_game_id = cast(str, item["game_id"])
+            try:
+                game_id = UUID(raw_game_id)
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if str(game_id) == item["game_id"] and game_id not in seen:
+                result.append(game_id)
+                seen.add(game_id)
+        return tuple(result)
+
+    @staticmethod
+    def _handoff_context(
+        intent: Intent,
+        refinement: dict[str, object],
+        correlation_id: UUID,
+    ) -> dict[str, object]:
+        considered = [
+            cast(dict[str, object], item)
+            for item in cast(list[object], refinement["considered_options"])
+            if type(item) is dict
+            and isinstance(item.get("game_id"), str)
+            and isinstance(item.get("title"), str)
+        ]
+        rejected: list[dict[str, object]] = []
+        for item in cast(list[object], refinement["rejected_options"]):
+            if (
+                type(item) is dict
+                and isinstance(item.get("game_id"), str)
+                and isinstance(item.get("title"), str)
+                and isinstance(item.get("reason"), str)
+                and type(item.get("source_update_id")) is int
+                and type(item.get("recommendation_update_id")) is int
+            ):
+                item = cast(dict[str, object], item)
+                rejected.append({
+                    "game_id": item["game_id"],
+                    "title": redact_sensitive_text(cast(str, item["title"])),
+                    "reason": item["reason"],
+                    "source_update_id": item["source_update_id"],
+                    "recommendation_update_id": item["recommendation_update_id"],
+                })
+        return {
+            "version": "handoff-context.v1",
+            "correlation_id": str(correlation_id),
+            "intent": intent.to_dict(),
+            "options_considered": [
+                {
+                    "game_id": item["game_id"],
+                    "title": redact_sensitive_text(cast(str, item["title"])),
+                }
+                for item in considered[-100:]
+            ],
+            "rejected_options": rejected[-100:],
+        }
+
     def _extract(
-        self, message: IncomingMessage, session_id: UUID, previous: Intent
+        self,
+        message: IncomingMessage,
+        session_id: UUID,
+        previous: Intent,
+        *,
+        previous_options: list[dict[str, str]] | None = None,
     ) -> IntentDecision:
         if self.intent_extraction is not None:
+            if previous_options is None:
+                return self.intent_extraction.extract(
+                    message.text,
+                    previous,
+                    session_id=session_id,
+                    channel=message.channel,
+                    update_id=message.update_id,
+                    correlation_id=message.correlation_id,
+                )
             return self.intent_extraction.extract(
                 message.text,
                 previous,
@@ -412,6 +774,7 @@ class SessionWorkflow:
                 channel=message.channel,
                 update_id=message.update_id,
                 correlation_id=message.correlation_id,
+                previous_options=previous_options,
             )
         status = "suspected_injection" if is_prompt_injection(message.text) else "normal"
         provenance = IntentProvenance(

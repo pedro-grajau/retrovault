@@ -16,7 +16,7 @@ from app.modules.concierge.adapters import openai_model_gateway
 from app.modules.concierge.adapters.postgres_ai_ledger import PostgresAiLedger
 from app.modules.concierge.adapters.simulator import InMemorySessionStore
 from app.modules.concierge.application.context_reference import ContextReferenceService
-from app.modules.concierge.application.handoff import HandoffService
+from app.modules.concierge.application.handoff import HandoffService, _validated_options
 from app.modules.concierge.application.intent_extraction import IntentExtractionService
 from app.modules.concierge.application.session_workflow import SessionWorkflow
 from app.modules.concierge.domain.ai_ledger import AiPricing, ReservationGrant
@@ -60,9 +60,31 @@ def intent_payload(**overrides: object) -> IntentPayload:
         "constraints": [],
         "mode": None,
         "mode_cleared": False,
+        "cleared_fields": [],
     }
     value.update(overrides)
     return IntentPayload.from_mapping(value)
+
+
+@pytest.mark.parametrize(
+    "game_id", [123, "invalid-uuid", "36CCF674-A297-4DB3-9B5C-1661978524D9"]
+)
+def test_rejection_parsers_reject_non_textual_malformed_or_noncanonical_ids(
+    game_id: object,
+) -> None:
+    with pytest.raises(ValueError, match="invalid_rejection_id"):
+        IntentExtractionPayload.from_json(extraction_json(
+            rejections=[{"game_id": game_id, "reason": "style"}],
+            rejection_ambiguous=False,
+        ))
+    with pytest.raises(ValueError, match="invalid_handoff_context_option"):
+        _validated_options([{
+            "game_id": game_id,
+            "title": "Adventure Quest",
+            "reason": "style",
+            "source_update_id": 2,
+            "recommendation_update_id": 1,
+        }], rejected=True)
 
 
 class FakeLedger:

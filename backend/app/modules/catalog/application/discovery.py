@@ -36,6 +36,7 @@ class RecommendationCriteria:
     mode: Literal["purchase", "rental"] | None = None
     price_min_brl_cents: int | None = None
     price_max_brl_cents: int | None = None
+    excluded_game_ids: tuple[UUID, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,12 +93,17 @@ class PublicDiscovery:
                 if not hits:
                     break
                 scanned += len(hits)
-                eligible_by_id = self._eligible_offers(
-                    [hit.game for hit in hits], criteria
-                )
                 for hit in hits:
-                    offers = eligible_by_id.get(hit.game.id)
                     seen.add(hit.game.id)
+                eligible_hits = [
+                    hit for hit in hits
+                    if hit.game.id not in criteria.excluded_game_ids
+                ]
+                eligible_by_id = self._eligible_offers(
+                    [hit.game for hit in eligible_hits], criteria
+                )
+                for hit in eligible_hits:
+                    offers = eligible_by_id.get(hit.game.id)
                     if offers:
                         text_eligible.append(
                             DiscoveryCandidate(hit.game, offers, hit.matched_fields)
@@ -132,9 +138,15 @@ class PublicDiscovery:
             if not games:
                 break
             scanned += len(games)
-            eligible_by_id = self._eligible_offers(games, criteria)
+            eligible_games = [
+                game for game in games
+                if game.id not in criteria.excluded_game_ids
+            ]
+            eligible_by_id = self._eligible_offers(eligible_games, criteria)
             for game in games:
                 if game.id in seen:
+                    continue
+                if game.id not in eligible_by_id:
                     continue
                 offers = eligible_by_id.get(game.id)
                 if offers:

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
+from typing import Literal
 from uuid import uuid4
 
 import pytest
@@ -15,8 +16,16 @@ from app.modules.concierge.adapters.simulator import (
     SessionSimulator,
 )
 from app.modules.concierge.application.context_reference import ContextReferenceService
+from app.modules.concierge.application.handoff import (
+    HandoffDecision,
+    HandoffService,
+    _validated_context,
+)
 from app.modules.concierge.application.intent_extraction import IntentDecision
-from app.modules.concierge.application.session_workflow import SessionWorkflow
+from app.modules.concierge.application.session_workflow import (
+    SessionWorkflow,
+    build_session_graph,
+)
 from app.modules.concierge.domain.intent import Intent, IntentProvenance
 from app.modules.concierge.domain.session import IncomingMessage
 from app.modules.concierge.ports.recommendations import RecommendationOutcome
@@ -81,7 +90,7 @@ def test_session_simulator_uses_same_versioned_workflow_and_persists_context() -
     assert session["context_game_id"] == game_id
     assert "Sandbox" in result.reply_text
     assert "game_id" not in result.reply_text
-    assert store._messages[("simulator", 1)]["workflow_version"] == "2.3.v1"
+    assert store._messages[("simulator", 1)]["workflow_version"] == "2.4.v1"
 
 
 @pytest.mark.parametrize("text", ["", "x" * 4097, "nul\x00byte", "bell\x07"])
@@ -193,6 +202,91 @@ def test_fallback_and_handoff_after_recommendation_clear_old_context() -> None:
     assert "encaminhamento humano" in handoff.reply_text.casefold()
     assert store._messages[("simulator", 602)]["recommendation_context"] is None
     assert store._messages[("simulator", 603)]["recommendation_context"] is None
+
+
+@pytest.mark.parametrize(
+    ("handoff_status", "expected_reply"),
+    [
+        ("registered", "Registrei o contexto para revisão humana"),
+        ("unavailable", "Não consegui registrar a revisão humana agora"),
+    ],
+)
+@pytest.mark.parametrize("recommendation_status", ["empty", "accepted"])
+def test_automatic_handoff_at_refinement_limit_persists_reply_without_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+    handoff_status: Literal["registered", "unavailable"],
+    expected_reply: str,
+    recommendation_status: Literal["empty", "accepted"],
+) -> None:
+    store, saver, references, _ = setup_workflow()
+    handoff_service = HandoffService(None, frozenset())
+    handoff_calls: list[dict[str, object]] = []
+
+    def request(**kwargs: object) -> HandoffDecision:
+        handoff_calls.append(kwargs)
+        return HandoffDecision(handoff_status)
+
+    recommendations = GreetingRecommendations()
+    monkeypatch.setattr(handoff_service, "request", request)
+    monkeypatch.setattr(
+        recommendations,
+        "recommend",
+        lambda *args, **kwargs: RecommendationOutcome(
+            recommendation_status, "Sem alternativas", {"reused_previous_options": True}
+        ),
+    )
+    workflow = SessionWorkflow(
+        store, references, lambda: null_context(saver),
+        intent_extraction=SequenceExtraction([_intent_decision("accepted")]),
+        recommendations=recommendations,
+        handoff_service=handoff_service,
+        max_failed_refinement_rounds=3,
+    )
+    now = datetime.now(UTC)
+    started = workflow.handle(incoming(651, 651, "/start", sent_at=now))
+    config = {"configurable": {"thread_id": str(started.session_id)}}
+    graph = build_session_graph(saver)
+    game_id = str(uuid4())
+    considered = [{"game_id": game_id, "title": "Adventure Quest"}]
+    rejected = [{
+        "game_id": game_id,
+        "title": "Adventure Quest",
+        "reason": "style",
+        "source_update_id": 650,
+        "recommendation_update_id": 649,
+    }]
+    graph.update_state(config, {"refinement_state": {
+        "version": "refinement.v1",
+        "failed_rounds": 2,
+        "pending_refinement": True,
+        "rejected_options": rejected,
+        "considered_options": considered,
+        "intent_revisions": [],
+    }})
+
+    event = incoming(652, 652, "Quero outra alternativa", sent_at=now + timedelta(seconds=1))
+    result = workflow.handle(event)
+
+    assert result.status == "claimed"
+    assert expected_reply in result.reply_text
+    persisted = store._messages[("simulator", 652)]
+    assert persisted["reply"] == result.reply_text
+    assert persisted["recommendation_context"] is None
+    assert len(handoff_calls) == 1
+    assert handoff_calls[0]["session_id"] == started.session_id
+    assert handoff_calls[0]["update_id"] == 652
+    snapshot = handoff_calls[0]["context_snapshot"]
+    assert snapshot == {
+        "version": "handoff-context.v1",
+        "correlation_id": str(event.correlation_id),
+        "intent": Intent(genre="Adventure").to_dict(),
+        "options_considered": considered,
+        "rejected_options": rejected,
+    }
+    assert _validated_context(snapshot, event.correlation_id) == snapshot
+    state = graph.get_state(config).values["refinement_state"]
+    assert state["failed_rounds"] == 3
+    assert state["pending_refinement"] is False
 
 
 def test_immediate_outbox_redrive_persists_fresh_commerce_evidence_and_text() -> None:

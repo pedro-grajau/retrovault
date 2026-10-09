@@ -90,7 +90,7 @@ _intent_extraction = IntentExtractionService(
     pricing=_ai_pricing,
     model_snapshot=settings.pixel_openai_model_snapshot,
     configuration_version=settings.pixel_ai_configuration_version,
-    workflow_version="2.3.v1",
+    workflow_version="2.4.v1",
 )
 _recommendation_service = RecommendationService(
     _model_gateway,
@@ -99,7 +99,7 @@ _recommendation_service = RecommendationService(
     pricing=_ai_pricing,
     model_snapshot=settings.pixel_openai_model_snapshot,
     configuration_version=settings.pixel_ai_configuration_version,
-    workflow_version="2.3.v1",
+    workflow_version="2.4.v1",
     public_site_url=settings.pixel_public_site_url,
 )
 configure_services(
@@ -126,6 +126,7 @@ configure_concierge_services(
     message_max_age_seconds=settings.pixel_telegram_message_max_age_seconds,
     retention_days=settings.pixel_telegram_retention_days,
     typing_threshold_seconds=settings.pixel_telegram_typing_threshold_seconds,
+    max_failed_refinement_rounds=settings.pixel_max_failed_refinement_rounds,
 )
 
 
