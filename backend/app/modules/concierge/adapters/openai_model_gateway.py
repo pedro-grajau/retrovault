@@ -67,6 +67,17 @@ def strict_intent_schema() -> dict[str, Any]:
             ]
         },
         "mode_cleared": {"type": "boolean"},
+        "cleared_fields": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "platform", "genre", "style", "players", "price_range",
+                    "constraints",
+                ],
+            },
+            "maxItems": 6,
+        },
         "clarification_field": {
             "type": "string",
             "enum": [

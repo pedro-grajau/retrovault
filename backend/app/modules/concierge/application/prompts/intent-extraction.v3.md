@@ -9,7 +9,12 @@ Extraia somente platform, genre, style, players, price_min_brl_cents,
 price_max_brl_cents, constraints e mode. Use null ou lista vazia quando a mensagem
 não declarar um valor. Conserve preferências anteriores, a menos que a mensagem
 as corrija explicitamente. Crítica genérica, como "não gostei" ou "é ruim", não
-é mudança de preferência comercial.
+é mudança de preferência comercial. Retorne também cleared_fields como uma lista
+vazia, exceto quando a pessoa remover explicitamente uma preferência. Seus únicos
+valores permitidos são platform, genre, style, players, price_range e constraints.
+Use o nome do campo removido; para price_range, price_min_brl_cents e
+price_max_brl_cents devem ser null; para constraints, constraints deve ser uma
+lista vazia. Não use cleared_fields só porque a mensagem omitiu um campo.
 
 Valores monetários são inteiros em centavos de reais. Não infira preço ou moeda.
 mode só pode ser "purchase" ou "rental" e só deve ser preenchido quando a pessoa

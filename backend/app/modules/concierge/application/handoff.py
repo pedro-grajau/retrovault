@@ -124,7 +124,7 @@ def _validated_options(value: object, *, rejected: bool) -> list[dict[str, objec
         title = redact_sensitive_text(title)
         if (
             str(game_id) != raw["game_id"]
-            or game_id in seen
+            or (not rejected and game_id in seen)
             or not title
             or len(title) > 200
             or any(not character.isprintable() for character in title)
@@ -172,14 +172,14 @@ def _context_notification(snapshot: dict[str, object], correlation_id: UUID) -> 
     rejected = cast(list[dict[str, object]], snapshot["rejected_options"])
     prioritized: list[str] = []
     if rejected:
-        item = rejected[0]
+        item = rejected[-1]
         prioritized.append(
             f"recusada {item['title']} ({item['game_id']}): {item['reason']}"
         )
     prioritized.extend(part for part in preference_parts if part)
     prioritized.extend(
         f"considerada {item['title']} ({item['game_id']})"
-        for item in considered[:3]
+        for item in considered[-3:]
     )
     prefix = "Sandbox: revisão humana; "
     suffix = f". Correlação: {correlation_id}. Sem histórico de conversa."

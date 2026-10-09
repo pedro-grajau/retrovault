@@ -116,6 +116,15 @@ class RecommendationService:
                     "ou falar com uma pessoa usando /humano.",
                 )
             return RecommendationOutcome("empty", _NO_MATCH)
+        previous_plan = RecommendationPlan.from_dict(previous_recommendation)
+        discovery_exclusions = tuple(
+            dict.fromkeys(
+                (
+                    *excluded_game_ids,
+                    *(previous_plan.presented_game_ids if previous_plan else ()),
+                )
+            )
+        )
         criteria = RecommendationCriteria(
             query=intent.style,
             platform=intent.platform,
@@ -123,7 +132,7 @@ class RecommendationService:
             mode=intent.mode,
             price_min_brl_cents=intent.price_min_brl_cents,
             price_max_brl_cents=intent.price_max_brl_cents,
-            excluded_game_ids=tuple(dict.fromkeys(excluded_game_ids)),
+            excluded_game_ids=discovery_exclusions,
         )
         try:
             candidates = self.discovery.recommend_candidates(criteria)

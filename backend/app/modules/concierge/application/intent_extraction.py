@@ -38,6 +38,7 @@ class IntentDecision:
     provenance: IntentProvenance
     rejections: tuple[IntentRejection, ...] = ()
     rejection_ambiguous: bool = False
+    price_range_updated: bool = False
 
 
 class IntentExtractionService:
@@ -203,6 +204,11 @@ class IntentExtractionService:
             safety,
             rejections=extracted.rejections,
             rejection_ambiguous=extracted.rejection_ambiguous,
+            price_range_updated=(
+                extracted.price_min_brl_cents is not None
+                or extracted.price_max_brl_cents is not None
+                or "price_range" in extracted.cleared_fields
+            ),
         )
 
     @staticmethod
@@ -269,6 +275,7 @@ class IntentExtractionService:
         *,
         rejections: tuple[IntentRejection, ...] = (),
         rejection_ambiguous: bool = False,
+        price_range_updated: bool = False,
     ) -> IntentDecision:
         provenance = IntentProvenance(
             intent_version=INTENT_VERSION,
@@ -286,4 +293,5 @@ class IntentExtractionService:
             provenance,
             rejections,
             rejection_ambiguous,
+            price_range_updated,
         )

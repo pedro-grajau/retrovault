@@ -222,6 +222,7 @@ class InMemorySessionStore:
                 "delivery_status": None,
                 "delivery_lease_token": None,
                 "delivery_lease_until": None,
+                "delivered_at": None,
             }
             return MessageClaim(
                 "claimed",
@@ -274,9 +275,13 @@ class InMemorySessionStore:
             ]
             if not delivered:
                 return None
+            minimum_time = datetime.min.replace(tzinfo=UTC)
             delivered.sort(
-                key=lambda record: record.get(
-                    "received_at", datetime.min.replace(tzinfo=UTC)
+                key=lambda record: (
+                    record.get("delivered_at")
+                    if isinstance(record.get("delivered_at"), datetime)
+                    else record.get("received_at", minimum_time),
+                    record.get("received_at", minimum_time),
                 )
             )
             latest = delivered[-1]
@@ -388,6 +393,7 @@ class InMemorySessionStore:
             record["delivery_lease_token"] = None
             record["delivery_lease_until"] = None
             record["delivered"] = True
+            record["delivered_at"] = datetime.now(UTC)
             return True
 
     def release_reply(

@@ -75,6 +75,7 @@ class SessionState(TypedDict):
     intent_provenance: NotRequired[dict[str, object]]
     extraction_status: NotRequired[str]
     clarification_field: NotRequired[str]
+    force_clarification: NotRequired[bool]
     prepared_recommendation: NotRequired[dict[str, object] | None]
     prepared_refinement_state: NotRequired[dict[str, object]]
     recommendation_context: NotRequired[dict[str, object] | None]
@@ -164,7 +165,9 @@ def _entry_node(state: SessionState) -> dict[str, object]:
             intent_value = state.get("prepared_intent")
             current_intent = Intent.from_dict(intent_value) or Intent()
             clarification = clarification_question(
-                cast(Any, state.get("clarification_field", "none")), current_intent
+                cast(Any, state.get("clarification_field", "none")),
+                current_intent,
+                force=bool(state.get("force_clarification")),
             )
             reply = (
                 clarification
@@ -411,6 +414,9 @@ class SessionWorkflow:
                     prior_state.get("last_processed_update_id") == message.update_id
                 )
                 prior_intent = Intent.from_dict(prior_state.get("intent")) or Intent()
+                # Rewriting the safe canonical form also replaces legacy checkpoints
+                # whose individual fields contained sensitive text.
+                initial_state["prepared_intent"] = prior_intent.to_dict()
                 refinement = _restore_refinement_state(
                     prior_state.get("refinement_state")
                 )
@@ -471,7 +477,17 @@ class SessionWorkflow:
                     initial_state["prepared_intent"] = decision.intent.to_dict()
                     initial_state["prepared_provenance"] = decision.provenance.to_dict()
                     initial_state["extraction_status"] = decision.status
-                    initial_state["clarification_field"] = decision.clarification_field
+                    price_rejection_needs_range = (
+                        decision.status == "accepted"
+                        and any(item.reason == "price" for item in decision.rejections)
+                        and not decision.price_range_updated
+                    )
+                    initial_state["clarification_field"] = (
+                        "price_range"
+                        if price_rejection_needs_range
+                        else decision.clarification_field
+                    )
+                    initial_state["force_clarification"] = price_rejection_needs_range
                     initial_state["rejection_ambiguous"] = decision.rejection_ambiguous
                     current_refinement = _restore_refinement_state(refinement)
                     if isinstance(prior_recommendation, dict):
@@ -526,7 +542,9 @@ class SessionWorkflow:
                     ):
                         current_intent = decision.intent
                         clarification = clarification_question(
-                            cast(Any, decision.clarification_field), current_intent
+                            cast(Any, initial_state["clarification_field"]),
+                            current_intent,
+                            force=price_rejection_needs_range,
                         )
                         if clarification is None:
                             outcome = self.recommendations.recommend(
@@ -644,26 +662,26 @@ class SessionWorkflow:
         considered = cast(list[object], refinement["considered_options"])
         candidates = {item.game_id: item for item in plan.candidates}
         presented_ids = set(plan.presented_game_ids)
-        known = {
-            item.get("game_id")
-            for item in considered
-            if type(item) is dict and isinstance(item.get("game_id"), str)
-        }
         for ranked in plan.ranking:
-            if ranked.game_id not in presented_ids or str(ranked.game_id) in known:
+            if ranked.game_id not in presented_ids:
                 continue
-            if len(considered) >= 100:
-                break
             candidate = candidates.get(ranked.game_id)
             if candidate is None:
                 continue
+            game_id = str(candidate.game_id)
+            considered[:] = [
+                item
+                for item in considered
+                if not (type(item) is dict and item.get("game_id") == game_id)
+            ]
             considered.append(
                 {
-                    "game_id": str(candidate.game_id),
+                    "game_id": game_id,
                     "title": redact_sensitive_text(candidate.title),
                 }
             )
-            known.add(str(candidate.game_id))
+            if len(considered) > 100:
+                del considered[:-100]
 
     @staticmethod
     def _excluded_ids(refinement: dict[str, object]) -> tuple[UUID, ...]:
@@ -694,7 +712,7 @@ class SessionWorkflow:
             and isinstance(item.get("game_id"), str)
             and isinstance(item.get("title"), str)
         ]
-        rejected_by_id: dict[str, dict[str, object]] = {}
+        rejected: list[dict[str, object]] = []
         for item in cast(list[object], refinement["rejected_options"]):
             if (
                 type(item) is dict
@@ -704,13 +722,13 @@ class SessionWorkflow:
                 and type(item.get("source_update_id")) is int
                 and type(item.get("recommendation_update_id")) is int
             ):
-                rejected_by_id[cast(str, item["game_id"])] = {
+                rejected.append({
                     "game_id": item["game_id"],
                     "title": redact_sensitive_text(cast(str, item["title"])),
                     "reason": item["reason"],
                     "source_update_id": item["source_update_id"],
                     "recommendation_update_id": item["recommendation_update_id"],
-                }
+                })
         return {
             "version": "handoff-context.v1",
             "correlation_id": str(correlation_id),
@@ -722,7 +740,7 @@ class SessionWorkflow:
                 }
                 for item in considered[-100:]
             ],
-            "rejected_options": list(rejected_by_id.values())[-100:],
+            "rejected_options": rejected[-100:],
         }
 
     def _extract(

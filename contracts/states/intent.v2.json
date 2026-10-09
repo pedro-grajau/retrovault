@@ -17,7 +17,14 @@
     "mode": {"type": ["string", "null"], "enum": ["purchase", "rental", null], "explicit_only": true}
   },
   "extraction_signals": {
-    "mode_cleared": {"type": "boolean", "transient": true, "persisted": false, "true_clears_previous_mode": true}
+    "mode_cleared": {"type": "boolean", "transient": true, "persisted": false, "true_clears_previous_mode": true},
+    "cleared_fields": {
+      "type": "array",
+      "items": ["platform", "genre", "style", "players", "price_range", "constraints"],
+      "transient": true,
+      "persisted": false,
+      "clears_previous_explicit_preference": true
+    }
   },
   "additional_properties": false,
   "provenance": [
