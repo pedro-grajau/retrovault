@@ -28,9 +28,9 @@ from app.modules.concierge.application.intent_extraction import (
 from app.modules.concierge.domain.intent import (
     INTENT_VERSION,
     PROMPT_VERSION,
+    REFINEMENT_VERSION,
     Intent,
     IntentProvenance,
-    REFINEMENT_VERSION,
     clarification_question,
     is_prompt_injection,
     redact_sensitive_text,
@@ -42,7 +42,10 @@ from app.modules.concierge.domain.session import (
     OutboxReply,
     ProcessingResult,
 )
-from app.modules.concierge.ports.recommendations import Recommendations
+from app.modules.concierge.ports.recommendations import (
+    RecommendationOutcome,
+    Recommendations,
+)
 from app.modules.concierge.ports.sessions import SessionStore
 
 WORKFLOW_VERSION = "2.4.v1"
@@ -690,8 +693,10 @@ class SessionWorkflow:
         for item in cast(list[object], refinement["rejected_options"]):
             if type(item) is not dict or not isinstance(item.get("game_id"), str):
                 continue
+            item = cast(dict[str, object], item)
+            raw_game_id = cast(str, item["game_id"])
             try:
-                game_id = UUID(item["game_id"])
+                game_id = UUID(raw_game_id)
             except (ValueError, TypeError, AttributeError):
                 continue
             if str(game_id) == item["game_id"] and game_id not in seen:
@@ -706,7 +711,7 @@ class SessionWorkflow:
         correlation_id: UUID,
     ) -> dict[str, object]:
         considered = [
-            item
+            cast(dict[str, object], item)
             for item in cast(list[object], refinement["considered_options"])
             if type(item) is dict
             and isinstance(item.get("game_id"), str)
@@ -722,6 +727,7 @@ class SessionWorkflow:
                 and type(item.get("source_update_id")) is int
                 and type(item.get("recommendation_update_id")) is int
             ):
+                item = cast(dict[str, object], item)
                 rejected.append({
                     "game_id": item["game_id"],
                     "title": redact_sensitive_text(cast(str, item["title"])),

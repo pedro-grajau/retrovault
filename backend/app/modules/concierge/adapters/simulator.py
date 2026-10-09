@@ -285,9 +285,10 @@ class InMemorySessionStore:
                 )
             )
             latest = delivered[-1]
+            reply = latest.get("reply")
             return restore_legacy_presented_game_ids(
                 latest.get("recommendation_context"),
-                latest.get("reply") if isinstance(latest.get("reply"), str) else "",
+                reply if isinstance(reply, str) else "",
             )
 
     def claim_reply(

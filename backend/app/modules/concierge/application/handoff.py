@@ -113,9 +113,12 @@ def _validated_options(value: object, *, rejected: bool) -> list[dict[str, objec
         )
         if type(item) is not dict or set(item) != expected:
             raise ValueError("invalid_handoff_context_option")
-        raw = item
+        raw = cast(dict[str, object], item)
+        raw_game_id = raw["game_id"]
+        if not isinstance(raw_game_id, str):
+            raise ValueError("invalid_handoff_context_option_id")
         try:
-            game_id = UUID(raw["game_id"])
+            game_id = UUID(raw_game_id)
         except (ValueError, TypeError, AttributeError) as exc:
             raise ValueError("invalid_handoff_context_option_id") from exc
         title = raw["title"]

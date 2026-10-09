@@ -255,8 +255,12 @@ class IntentExtractionPayload(IntentPayload):
         for item in raw_rejections:
             if type(item) is not dict or set(item) != {"game_id", "reason"}:
                 raise ValueError("invalid_rejection")
+            item = cast(dict[str, object], item)
+            raw_game_id = item["game_id"]
+            if not isinstance(raw_game_id, str):
+                raise ValueError("invalid_rejection_id")
             try:
-                game_id = UUID(item["game_id"])
+                game_id = UUID(raw_game_id)
             except (ValueError, TypeError, AttributeError) as exc:
                 raise ValueError("invalid_rejection_id") from exc
             if str(game_id) != item["game_id"]:

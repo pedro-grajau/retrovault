@@ -236,12 +236,13 @@ class RecommendationPlan:
                 or any(type(item) is not str for item in presented_raw)
             ):
                 return None
+            presented_raw = cast(list[str], presented_raw)
             presented_game_ids = tuple(UUID(item) for item in presented_raw)
             if (
                 len(set(presented_game_ids)) != len(presented_game_ids)
                 or any(
                     str(game_id) != raw_id
-                    for game_id, raw_id in zip(presented_game_ids, presented_raw)
+                    for game_id, raw_id in zip(presented_game_ids, presented_raw, strict=True)
                 )
                 or not set(presented_game_ids).issubset(
                     {item.game_id for item in ranking}
