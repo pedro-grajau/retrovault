@@ -457,6 +457,28 @@ function HomePage() {
   )
 }
 
+function DemandPanel({ game }: { game: GameResponse }) {
+  const [mode, setMode] = useState<"purchase" | "rental">("purchase")
+  const [webContext, setWebContext] = useState(false)
+  return (
+    <section className="demand-panel" aria-labelledby="demand-heading">
+      <p className="eyebrow">AVISO DE DISPONIBILIDADE · SANDBOX</p>
+      <h3 id="demand-heading">Avise-me quando houver uma unidade</h3>
+      <p>{game.title} — {game.platform}</p>
+      <label htmlFor="demand-mode">Modalidade de interesse</label>
+      <select id="demand-mode" value={mode} onChange={(event) => setMode(event.target.value as "purchase" | "rental")}>
+        <option value="purchase">Compra</option><option value="rental">Aluguel</option>
+      </select>
+      <p>Não há reserva, prioridade, garantia de aquisição ou prazo. O interesse termina após o primeiro aviso entregue. Outro aviso exige novo consentimento.</p>
+      <p>O cadastro e o cancelamento acontecem no canal da conversa, após sua confirmação explícita.</p>
+      <p>Envie à Pixel: <code>{`/demanda ${game.title} | ${game.platform} | ${mode === "purchase" ? "compra" : "aluguel"}`}</code>. Depois use o comando de confirmação que ela fornecer. Consulte /demandas e cancele com /cancelar_demanda seguido do código.</p>
+      <PixelEntry gameId={game.id} />
+      <button className="button-secondary" type="button" aria-expanded={webContext} onClick={() => setWebContext(!webContext)}>Continuar pela Web</button>
+      {webContext && <p role="status">Você pode acompanhar a disponibilidade atual nesta página pela Web. Para cadastrar ou cancelar um aviso, continue no Telegram com o contexto deste jogo.</p>}
+    </section>
+  )
+}
+
 function GameOffers({
   game,
   refreshing,
@@ -500,11 +522,9 @@ function GameOffers({
           Tente atualizar mais tarde.
         </div>
       ) : availableOffers.length === 0 ? (
-        <div className="state-panel detail-unavailable" role="status">
-          <p>
-            Nenhuma unidade física está disponível agora. Não há compra ou
-            aluguel para iniciar.
-          </p>
+        <div className="state-panel detail-unavailable">
+          <p role="status">Nenhuma unidade física está disponível agora. Não há compra ou aluguel para iniciar.</p>
+          <DemandPanel game={game} />
         </div>
       ) : (
         <div className="detail-offer-list">
@@ -780,7 +800,7 @@ function GameDetailPage({ gameId }: { gameId: string }) {
           refreshError={refreshError}
           onRefresh={() => void refresh()}
         />
-        <PixelEntry gameId={game.id} />
+        {(refreshError || game.commerce_status === "unavailable" || (game.offers ?? []).some((offer) => offer.available_units > 0)) && <PixelEntry gameId={game.id} />}
       </article>
     </main>
   )

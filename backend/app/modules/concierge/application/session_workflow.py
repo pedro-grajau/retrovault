@@ -20,6 +20,7 @@ from app.modules.concierge.application.context_reference import (
     ContextReferencesUnavailable,
     InvalidContextReference,
 )
+from app.modules.concierge.application.demand import DemandService
 from app.modules.concierge.application.handoff import HandoffService
 from app.modules.concierge.application.intent_extraction import (
     IntentDecision,
@@ -48,7 +49,7 @@ from app.modules.concierge.ports.recommendations import (
 )
 from app.modules.concierge.ports.sessions import SessionStore
 
-WORKFLOW_VERSION = "2.4.v1"
+WORKFLOW_VERSION = "2.5.v1"
 _START_COMMAND = re.compile(
     r"^/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?\s*$",
     re.IGNORECASE,
@@ -71,6 +72,7 @@ class SessionState(TypedDict):
     incoming_game_id: NotRequired[str | None]
     invalid_context_reference: NotRequired[bool]
     command: NotRequired[str]
+    demand_reply: NotRequired[str | None]
     handoff_status: NotRequired[str]
     prepared_intent: NotRequired[dict[str, object]]
     prepared_provenance: NotRequired[dict[str, object]]
@@ -92,9 +94,7 @@ class SessionState(TypedDict):
     reply_text: NotRequired[str | None]
 
 
-CheckpointerFactory = Callable[
-    [], AbstractContextManager[BaseCheckpointSaver[str]]
-]
+CheckpointerFactory = Callable[[], AbstractContextManager[BaseCheckpointSaver[str]]]
 
 
 def _entry_node(state: SessionState) -> dict[str, object]:
@@ -105,7 +105,9 @@ def _entry_node(state: SessionState) -> dict[str, object]:
     context_game_id = state.get("incoming_game_id") or state.get("context_game_id")
     first_turn = not state.get("greeting_sent")
     updates_context: dict[str, object] | None = None
-    if state.get("command") == "handoff":
+    if state.get("demand_reply"):
+        reply = cast(str, state["demand_reply"])
+    elif state.get("command") == "handoff":
         status = state.get("handoff_status")
         if status == "registered":
             reply = (
@@ -161,7 +163,8 @@ def _entry_node(state: SessionState) -> dict[str, object]:
             context = recommendation.get("context")
             updates_context = (
                 cast(dict[str, object], context)
-                if recommendation.get("status") == "accepted" and isinstance(context, dict)
+                if recommendation.get("status") == "accepted"
+                and isinstance(context, dict)
                 else None
             )
         else:
@@ -307,6 +310,7 @@ class SessionWorkflow:
         intent_extraction: IntentExtractionService | None = None,
         recommendations: Recommendations | None = None,
         handoff_service: HandoffService | None = None,
+        demand_service: DemandService | None = None,
         max_message_age_seconds: int = 900,
         max_failed_refinement_rounds: int = 3,
     ) -> None:
@@ -316,6 +320,7 @@ class SessionWorkflow:
         self.intent_extraction = intent_extraction
         self.recommendations = recommendations
         self.handoff_service = handoff_service
+        self.demand_service = demand_service
         self.max_message_age_seconds = max_message_age_seconds
         self.max_failed_refinement_rounds = max_failed_refinement_rounds
 
@@ -336,18 +341,21 @@ class SessionWorkflow:
             if context_reference is None and has_parameter:
                 invalid_reference = True
             safe_text = (
-                "/start [context parameter redacted]"
-                if has_parameter
-                else "/start"
+                "/start [context parameter redacted]" if has_parameter else "/start"
             )
         elif _HUMAN_COMMAND.fullmatch(message.text):
             command = "handoff"
             safe_text = "/humano"
+        elif DemandService.is_command(message.text):
+            command = "demand"
+            safe_text = "[comando de demanda; conteúdo não retido]"
         else:
             safe_text = "[conteúdo de mensagem não retido]"
         if context_reference:
             try:
-                context_game_id = self.context_references.validate(context_reference).game_id
+                context_game_id = self.context_references.validate(
+                    context_reference
+                ).game_id
             except InvalidContextReference:
                 invalid_reference = True
             except ContextReferencesUnavailable as exc:
@@ -379,7 +387,9 @@ class SessionWorkflow:
                 context_reference_hash=context_reference_hash,
             )
             if claim.status != "claimed":
-                return ProcessingResult(claim.status, claim.session_id, claim.reply_text)
+                return ProcessingResult(
+                    claim.status, claim.session_id, claim.reply_text
+                )
             if claim.session_id is None:
                 raise RuntimeError("claimed_session_missing")
             if claim.processing_lease_token is None:
@@ -397,6 +407,7 @@ class SessionWorkflow:
                     invalid_reference or claim.context_reference_replayed
                 ),
                 "command": command,
+                "demand_reply": None,
                 "extraction_status": "skipped",
                 "prepared_recommendation": None,
                 "recommendation_context": None,
@@ -428,9 +439,17 @@ class SessionWorkflow:
                 )
                 previous_options = _previous_options(prior_recommendation)
                 initial_state["last_recommendation_context"] = prior_recommendation
-                if not already_processed and command == "handoff":
+                if not already_processed and command == "demand":
+                    initial_state["demand_reply"] = (
+                        self.demand_service.handle(message, claim.session_id)
+                        if self.demand_service
+                        else "O registro de interesse está indisponível agora. Tente novamente mais tarde."
+                    )
+                elif not already_processed and command == "handoff":
                     if isinstance(prior_recommendation, dict):
-                        self._record_considered_options(refinement, prior_recommendation)
+                        self._record_considered_options(
+                            refinement, prior_recommendation
+                        )
                     initial_state["prepared_refinement_state"] = refinement
                     handoff = (
                         self.handoff_service.request(
@@ -459,6 +478,22 @@ class SessionWorkflow:
                         prior_intent,
                         previous_options=previous_options,
                     )
+                    if (
+                        decision.status == "accepted"
+                        and decision.demand_action != "none"
+                        and self.demand_service is not None
+                    ):
+                        if decision.demand_action == "list":
+                            demand_text = "/demandas"
+                        elif decision.demand_action == "cancel":
+                            demand_text = (
+                                f"/cancelar_demanda {decision.demand_id or ''}"
+                            )
+                        else:
+                            demand_text = f"/demanda {decision.demand_title or ''} | {decision.intent.platform or ''} | {decision.intent.mode or ''}"
+                        initial_state["demand_reply"] = self.demand_service.handle(
+                            replace(message, text=demand_text), claim.session_id
+                        )
                     allowed_rejections = {
                         item["game_id"] for item in previous_options or []
                     }
@@ -499,7 +534,9 @@ class SessionWorkflow:
                         )
                     changed = _changed_fields(prior_intent, decision.intent)
                     if changed:
-                        revisions = cast(list[object], current_refinement["intent_revisions"])
+                        revisions = cast(
+                            list[object], current_refinement["intent_revisions"]
+                        )
                         revisions.append(
                             {
                                 "revision": len(revisions) + 1,
@@ -542,6 +579,7 @@ class SessionWorkflow:
                         decision.status == "accepted"
                         and not decision.rejection_ambiguous
                         and self.recommendations is not None
+                        and not initial_state.get("demand_reply")
                     ):
                         current_intent = decision.intent
                         clarification = clarification_question(
@@ -556,7 +594,9 @@ class SessionWorkflow:
                                 channel=message.channel,
                                 update_id=message.update_id,
                                 correlation_id=message.correlation_id,
-                                excluded_game_ids=self._excluded_ids(current_refinement),
+                                excluded_game_ids=self._excluded_ids(
+                                    current_refinement
+                                ),
                                 previous_recommendation=prior_recommendation,
                             )
                             is_refinement_failure = bool(
@@ -565,7 +605,8 @@ class SessionWorkflow:
                                 outcome.status == "empty"
                                 or bool(
                                     isinstance(outcome.context, dict)
-                                    and outcome.context.get("reused_previous_options") is True
+                                    and outcome.context.get("reused_previous_options")
+                                    is True
                                 )
                             )
                             if is_refinement_failure:
@@ -598,7 +639,10 @@ class SessionWorkflow:
                                     if self.handoff_service is not None
                                     else None
                                 )
-                                if handoff is not None and handoff.status == "registered":
+                                if (
+                                    handoff is not None
+                                    and handoff.status == "registered"
+                                ):
                                     handoff_reply = (
                                         "Não encontrei uma alternativa adequada sem repetir as opções já vistas. "
                                         "Registrei o contexto para revisão humana no Sandbox; você não precisa "
@@ -620,14 +664,16 @@ class SessionWorkflow:
                                     current_refinement,
                                     outcome_recommendation.context,
                                 )
-                            initial_state["prepared_refinement_state"] = current_refinement
+                            initial_state["prepared_refinement_state"] = (
+                                current_refinement
+                            )
                             if (
                                 outcome_recommendation.status == "accepted"
                                 and isinstance(outcome_recommendation.context, dict)
                             ):
-                                outcome_recommendation.context["greeting_required"] = not bool(
-                                    prior_state.get("greeting_sent")
-                                )
+                                outcome_recommendation.context[
+                                    "greeting_required"
+                                ] = not bool(prior_state.get("greeting_sent"))
                             initial_state["prepared_recommendation"] = {
                                 "status": outcome_recommendation.status,
                                 "reply_text": outcome_recommendation.reply_text,
@@ -697,7 +743,7 @@ class SessionWorkflow:
             raw_game_id = cast(str, item["game_id"])
             try:
                 game_id = UUID(raw_game_id)
-            except (ValueError, TypeError, AttributeError):
+            except ValueError, TypeError, AttributeError:
                 continue
             if str(game_id) == item["game_id"] and game_id not in seen:
                 result.append(game_id)
@@ -728,13 +774,15 @@ class SessionWorkflow:
                 and type(item.get("recommendation_update_id")) is int
             ):
                 item = cast(dict[str, object], item)
-                rejected.append({
-                    "game_id": item["game_id"],
-                    "title": redact_sensitive_text(cast(str, item["title"])),
-                    "reason": item["reason"],
-                    "source_update_id": item["source_update_id"],
-                    "recommendation_update_id": item["recommendation_update_id"],
-                })
+                rejected.append(
+                    {
+                        "game_id": item["game_id"],
+                        "title": redact_sensitive_text(cast(str, item["title"])),
+                        "reason": item["reason"],
+                        "source_update_id": item["source_update_id"],
+                        "recommendation_update_id": item["recommendation_update_id"],
+                    }
+                )
         return {
             "version": "handoff-context.v1",
             "correlation_id": str(correlation_id),
@@ -776,7 +824,9 @@ class SessionWorkflow:
                 correlation_id=message.correlation_id,
                 previous_options=previous_options,
             )
-        status = "suspected_injection" if is_prompt_injection(message.text) else "normal"
+        status = (
+            "suspected_injection" if is_prompt_injection(message.text) else "normal"
+        )
         provenance = IntentProvenance(
             intent_version=INTENT_VERSION,
             prompt_version=PROMPT_VERSION,

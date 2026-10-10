@@ -1114,3 +1114,8 @@ footer {
     color: LinkText;
   }
 }
+
+.demand-panel { margin-top: 1.25rem; border-top: 1px solid var(--border, #444); padding-top: 1.25rem; display: grid; gap: .75rem; }
+.demand-panel code { overflow-wrap: anywhere; user-select: all; }
+.demand-panel select { padding: .6rem; max-width: 18rem; }
+.demand-panel .pixel-entry { margin-top: .5rem; }

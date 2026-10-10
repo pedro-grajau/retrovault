@@ -9,7 +9,7 @@ from typing import Literal, cast
 from uuid import UUID
 
 INTENT_VERSION = "intent.v2"
-PROMPT_VERSION = "intent-extraction.v3"
+PROMPT_VERSION = "intent-extraction.v4"
 REFINEMENT_VERSION = "refinement.v1"
 GameMode = Literal["purchase", "rental"]
 IntentField = Literal["platform", "genre", "style", "players", "price_range"]
@@ -18,8 +18,14 @@ ClearableIntentField = Literal[
 ]
 ClarificationField = IntentField | Literal["none"]
 RejectionReason = Literal[
-    "price", "platform", "genre", "style", "condition", "availability",
-    "players", "other",
+    "price",
+    "platform",
+    "genre",
+    "style",
+    "condition",
+    "availability",
+    "players",
+    "other",
 ]
 
 _INJECTION_MARKERS = re.compile(
@@ -90,7 +96,7 @@ class Intent:
                     )
                 ]
             payload = IntentPayload.from_mapping(payload_value)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
         return cls(
             platform=payload.platform,
@@ -214,6 +220,9 @@ class IntentExtractionPayload(IntentPayload):
     clarification_field: ClarificationField
     rejections: tuple[IntentRejection, ...]
     rejection_ambiguous: bool
+    demand_action: str = "none"
+    demand_title: str | None = None
+    demand_id: str | None = None
 
     @classmethod
     def from_json(cls, value: str) -> IntentExtractionPayload:
@@ -239,10 +248,32 @@ class IntentExtractionPayload(IntentPayload):
             frozenset(legacy_fields),
             frozenset(current_fields),
             frozenset(latest_fields),
+            frozenset(latest_fields | {"demand_action", "demand_title", "demand_id"}),
         }:
             raise ValueError("invalid_intent_extraction_fields")
+        demand_action = payload_values.get("demand_action", "none")
+        if demand_action not in {"none", "register", "list", "cancel"}:
+            raise ValueError("invalid_demand_action")
+        demand_title = payload_values.get("demand_title")
+        demand_id = payload_values.get("demand_id")
+        if demand_title is not None and (
+            type(demand_title) is not str
+            or not demand_title.strip()
+            or len(demand_title) > 200
+        ):
+            raise ValueError("invalid_demand_title")
+        if demand_id is not None:
+            if type(demand_id) is not str or str(UUID(demand_id)) != demand_id:
+                raise ValueError("invalid_demand_id")
         clarification = payload_values["clarification_field"]
-        if clarification not in ("platform", "genre", "style", "players", "price_range", "none"):
+        if clarification not in (
+            "platform",
+            "genre",
+            "style",
+            "players",
+            "price_range",
+            "none",
+        ):
             raise ValueError("invalid_clarification_field")
         clarification_field = cast(ClarificationField, clarification)
         rejection_ambiguous = payload_values.get("rejection_ambiguous", False)
@@ -267,8 +298,14 @@ class IntentExtractionPayload(IntentPayload):
                 raise ValueError("invalid_rejection_id")
             reason = item["reason"]
             if reason not in {
-                "price", "platform", "genre", "style", "condition",
-                "availability", "players", "other",
+                "price",
+                "platform",
+                "genre",
+                "style",
+                "condition",
+                "availability",
+                "players",
+                "other",
             }:
                 raise ValueError("invalid_rejection_reason")
             rejections.append(IntentRejection(game_id, cast(RejectionReason, reason)))
@@ -279,8 +316,14 @@ class IntentExtractionPayload(IntentPayload):
         intent_values = {
             key: payload_values[key]
             for key in payload_values
-            if key not in {
-                "clarification_field", "rejections", "rejection_ambiguous"
+            if key
+            not in {
+                "clarification_field",
+                "rejections",
+                "rejection_ambiguous",
+                "demand_action",
+                "demand_title",
+                "demand_id",
             }
         }
         # Accept the prior v3 response shape during a rolling provider rollout.
@@ -300,6 +343,11 @@ class IntentExtractionPayload(IntentPayload):
             clarification_field,
             tuple(rejections),
             rejection_ambiguous,
+            cast(str, demand_action),
+            redact_sensitive_text(demand_title)
+            if demand_title is not None
+            else None,
+            demand_id,
         )
 
 
@@ -333,9 +381,7 @@ def redact_sensitive_text(value: str) -> str:
     return _SENSITIVE_TEXT.sub("[redigido]", value)
 
 
-def _optional_integer(
-    value: object, *, minimum: int, maximum: int
-) -> int | None:
+def _optional_integer(value: object, *, minimum: int, maximum: int) -> int | None:
     if value is None:
         return None
     if type(value) is not int or value < minimum or value > maximum:
@@ -388,15 +434,23 @@ def merge_intent(previous: Intent | None, extracted: IntentPayload) -> Intent:
         for item in previous.constraints:
             if item not in constraints:
                 constraints.append(item)
-    minimum = None if "price_range" in cleared else (
-        extracted.price_min_brl_cents
-        if extracted.price_min_brl_cents is not None
-        else previous.price_min_brl_cents
+    minimum = (
+        None
+        if "price_range" in cleared
+        else (
+            extracted.price_min_brl_cents
+            if extracted.price_min_brl_cents is not None
+            else previous.price_min_brl_cents
+        )
     )
-    maximum = None if "price_range" in cleared else (
-        extracted.price_max_brl_cents
-        if extracted.price_max_brl_cents is not None
-        else previous.price_max_brl_cents
+    maximum = (
+        None
+        if "price_range" in cleared
+        else (
+            extracted.price_max_brl_cents
+            if extracted.price_max_brl_cents is not None
+            else previous.price_max_brl_cents
+        )
     )
     if (
         extracted.price_min_brl_cents is not None
@@ -416,12 +470,8 @@ def merge_intent(previous: Intent | None, extracted: IntentPayload) -> Intent:
         platform=(
             None if "platform" in cleared else extracted.platform or previous.platform
         ),
-        genre=(
-            None if "genre" in cleared else extracted.genre or previous.genre
-        ),
-        style=(
-            None if "style" in cleared else extracted.style or previous.style
-        ),
+        genre=(None if "genre" in cleared else extracted.genre or previous.genre),
+        style=(None if "style" in cleared else extracted.style or previous.style),
         players=(
             None if "players" in cleared else extracted.players or previous.players
         ),
@@ -447,8 +497,7 @@ def clarification_question(
         "style": intent.style is None,
         "players": intent.players is None,
         "price_range": (
-            intent.price_min_brl_cents is None
-            and intent.price_max_brl_cents is None
+            intent.price_min_brl_cents is None and intent.price_max_brl_cents is None
         ),
     }
     if field == "none" or (not force and not missing[field]):

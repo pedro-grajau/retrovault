@@ -26,6 +26,7 @@ from app.modules.catalog.application.discovery import PublicDiscovery
 from app.modules.commerce.adapters.postgres_offers import PostgresOfferReader
 from app.modules.concierge.adapters.openai_model_gateway import OpenAIModelGateway
 from app.modules.concierge.adapters.postgres_ai_ledger import PostgresAiLedger
+from app.modules.concierge.adapters.postgres_demands import PostgresDemandRepository
 from app.modules.concierge.adapters.postgres_handoffs import PostgresHandoffRepository
 from app.modules.concierge.adapters.postgres_sessions import (
     PostgresCheckpointFactory,
@@ -42,12 +43,18 @@ from app.modules.concierge.api.router import (
 from app.modules.concierge.api.router import (
     router as concierge_router,
 )
+from app.modules.concierge.application.demand import DemandService
+from app.modules.concierge.application.demand_notifications import (
+    DemandNotificationService,
+)
 from app.modules.concierge.application.intent_extraction import IntentExtractionService
 from app.modules.concierge.application.recommendation import RecommendationService
 from app.modules.concierge.domain.ai_ledger import AiLedgerUnavailable, AiPricing
+from app.modules.concierge.domain.demand import DemandNotification, DemandsUnavailable
 from app.modules.concierge.domain.handoff import HandoffNotification, HandoffUnavailable
 from app.modules.concierge.domain.session import OutboxReply
 from app.platform.config.settings import settings
+from app.platform.outbox.postgres_events import PostgresEventReader
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +65,13 @@ _offer_reader = PostgresOfferReader(_database_engine)
 _public_discovery = PublicDiscovery(_catalog_repository, _offer_reader)
 _ai_ledger_repository = PostgresAiLedger(_database_engine)
 _handoff_repository = PostgresHandoffRepository(_database_engine)
+_demand_repository = PostgresDemandRepository(_database_engine)
+_demand_service = DemandService(_demand_repository, _catalog_repository, _offer_reader)
+_demand_notifications = DemandNotificationService(
+    _demand_service,
+    PostgresEventReader(_database_engine),
+    public_site_url=settings.pixel_public_site_url,
+)
 _checkpoint_factory = PostgresCheckpointFactory(settings.database_url)
 _telegram_messenger = TelegramBotClient(
     settings.pixel_telegram_bot_token.get_secret_value()
@@ -90,7 +104,7 @@ _intent_extraction = IntentExtractionService(
     pricing=_ai_pricing,
     model_snapshot=settings.pixel_openai_model_snapshot,
     configuration_version=settings.pixel_ai_configuration_version,
-    workflow_version="2.4.v1",
+    workflow_version="2.5.v1",
 )
 _recommendation_service = RecommendationService(
     _model_gateway,
@@ -99,7 +113,7 @@ _recommendation_service = RecommendationService(
     pricing=_ai_pricing,
     model_snapshot=settings.pixel_openai_model_snapshot,
     configuration_version=settings.pixel_ai_configuration_version,
-    workflow_version="2.4.v1",
+    workflow_version="2.5.v1",
     public_site_url=settings.pixel_public_site_url,
 )
 configure_services(
@@ -116,6 +130,7 @@ configure_concierge_services(
     intent_extraction_service=_intent_extraction,
     recommendation_service=_recommendation_service,
     handoff_store=_handoff_repository,
+    demand_service=_demand_service,
     telegram_messenger=_telegram_messenger,
     telegram_bot_token_configured=bool(
         settings.pixel_telegram_bot_token.get_secret_value()
@@ -151,7 +166,12 @@ async def _session_retention_loop() -> None:
                 _session_repository.purge_expired_sessions,
                 settings.pixel_telegram_retention_days,
             )
-        except SessionsUnavailable:
+            await asyncio.to_thread(
+                _demand_repository.purge,
+                contact_days=settings.pixel_demand_contact_retention_days,
+                audit_days=settings.pixel_demand_audit_retention_days,
+            )
+        except SessionsUnavailable, DemandsUnavailable:
             logger.error("Concierge retention job failed")
 
 
@@ -181,7 +201,9 @@ async def _deliver_outbox_reply(reply: OutboxReply) -> None:
     try:
         await _telegram_messenger.send_message(reply.chat_id, text)
     except TelegramUnavailable:
-        logger.warning("Concierge outbox delivery failed for update %s", reply.update_id)
+        logger.warning(
+            "Concierge outbox delivery failed for update %s", reply.update_id
+        )
         await asyncio.to_thread(
             _session_repository.release_reply,
             reply.update_id,
@@ -217,6 +239,55 @@ async def _deliver_handoff(notification: HandoffNotification) -> None:
     )
 
 
+def _deliver_demand_guarded(
+    notification: DemandNotification, loop: asyncio.AbstractEventLoop
+) -> None:
+    # Keep the connection, advisory lock and acknowledgment on this worker thread;
+    # the event loop remains free for transport and concurrent cancellation.
+    with _demand_repository.delivery_guard(notification) as valid:
+        if not valid:
+            return
+        try:
+            notice = _demand_notifications.prepare(notification)
+            if notice is None:
+                _demand_repository.retry(notification, suppressed=True)
+                return
+            if not settings.pixel_telegram_bot_token.get_secret_value():
+                _demand_repository.retry(notification)
+                return
+            asyncio.run_coroutine_threadsafe(
+                _telegram_messenger.send_message(notification.chat_id, notice), loop
+            ).result()
+        except Exception:
+            _demand_repository.retry(notification)
+            return
+        if not _demand_repository.complete(notification):
+            logger.error(
+                "Demand transport confirmed but durable acknowledgment was fenced"
+            )
+            raise DemandsUnavailable("demand_delivery_acknowledgment_failed")
+
+
+async def _deliver_demand(notification: DemandNotification) -> None:
+    await asyncio.to_thread(
+        _deliver_demand_guarded, notification, asyncio.get_running_loop()
+    )
+
+
+async def _demand_delivery_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(_demand_notifications.process_events)
+            notices = await asyncio.to_thread(
+                _demand_notifications.claim, channel="telegram", limit=1
+            )
+            for notice in notices:
+                await _deliver_demand(notice)
+        except Exception:
+            logger.error("Concierge demand worker failed")
+        await asyncio.sleep(1)
+
+
 async def _outbox_delivery_loop() -> None:
     while True:
         try:
@@ -227,7 +298,9 @@ async def _outbox_delivery_loop() -> None:
                 lease_seconds=30,
             )
             if replies:
-                await asyncio.gather(*(_deliver_outbox_reply(reply) for reply in replies))
+                await asyncio.gather(
+                    *(_deliver_outbox_reply(reply) for reply in replies)
+                )
             handoffs = await asyncio.to_thread(
                 _handoff_repository.claim_pending_handoffs,
                 now=datetime.now(UTC),
@@ -255,7 +328,8 @@ async def _ai_ledger_maintenance_loop() -> None:
             if last_purge is None or monotonic_now - last_purge >= 86400:
                 await asyncio.to_thread(
                     _ai_ledger_repository.purge_expired_metadata,
-                    before=now - timedelta(days=settings.pixel_ai_ledger_retention_days),
+                    before=now
+                    - timedelta(days=settings.pixel_ai_ledger_retention_days),
                 )
                 last_purge = monotonic_now
         except AiLedgerUnavailable:
@@ -270,7 +344,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         _session_repository.purge_expired_sessions,
         settings.pixel_telegram_retention_days,
     )
+    await asyncio.to_thread(
+        _demand_repository.purge,
+        contact_days=settings.pixel_demand_contact_retention_days,
+        audit_days=settings.pixel_demand_audit_retention_days,
+    )
     retention_task = asyncio.create_task(_session_retention_loop())
+    demand_task = asyncio.create_task(_demand_delivery_loop())
     ai_ledger_task = asyncio.create_task(_ai_ledger_maintenance_loop())
     outbox_task = (
         asyncio.create_task(_outbox_delivery_loop())
@@ -280,6 +360,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        demand_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await demand_task
         retention_task.cancel()
         with suppress(asyncio.CancelledError):
             await retention_task
@@ -292,7 +375,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 await outbox_task
 
 
-app = FastAPI(title="RetroVault API", version="1.0.0", openapi_url="/api/v1/openapi.json", docs_url="/api/v1/docs", lifespan=lifespan)
+app = FastAPI(
+    title="RetroVault API",
+    version="1.0.0",
+    openapi_url="/api/v1/openapi.json",
+    docs_url="/api/v1/docs",
+    lifespan=lifespan,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:4173"],
@@ -353,9 +442,20 @@ async def add_correlation_header(request: Request, call_next):  # type: ignore[n
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_problem(request: Request, _: RequestValidationError) -> JSONResponse:
-    problem = Problem(title="Request validation failed", status=422, code="request_validation_failed", correlation_id=request.state.correlation_id)
-    return JSONResponse(problem.model_dump(mode="json"), status_code=422, media_type="application/problem+json")
+async def validation_problem(
+    request: Request, _: RequestValidationError
+) -> JSONResponse:
+    problem = Problem(
+        title="Request validation failed",
+        status=422,
+        code="request_validation_failed",
+        correlation_id=request.state.correlation_id,
+    )
+    return JSONResponse(
+        problem.model_dump(mode="json"),
+        status_code=422,
+        media_type="application/problem+json",
+    )
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -393,17 +493,25 @@ async def internal_problem(request: Request, _: Exception) -> JSONResponse:
     "/api/v1/system/version",
     response_model=VersionResponse,
     tags=["system"],
-    responses={500: problem_responses(500)[500], 200: {"headers": CORRELATION_ID_RESPONSE_HEADER}},
+    responses={
+        500: problem_responses(500)[500],
+        200: {"headers": CORRELATION_ID_RESPONSE_HEADER},
+    },
     openapi_extra={"parameters": [CORRELATION_ID_PARAMETER]},
 )
 async def version(request: Request) -> VersionResponse:
-    return VersionResponse(app_version=settings.app_version, correlation_id=request.state.correlation_id)
+    return VersionResponse(
+        app_version=settings.app_version, correlation_id=request.state.correlation_id
+    )
 
 
 @app.get(
     "/api/v1/health",
     tags=["system"],
-    responses={500: problem_responses(500)[500], 200: {"headers": CORRELATION_ID_RESPONSE_HEADER}},
+    responses={
+        500: problem_responses(500)[500],
+        200: {"headers": CORRELATION_ID_RESPONSE_HEADER},
+    },
     openapi_extra={"parameters": [CORRELATION_ID_PARAMETER]},
 )
 async def health() -> dict[str, str]:

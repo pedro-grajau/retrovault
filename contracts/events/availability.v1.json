@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Commerce availability v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "event_id",
+    "game_id",
+    "unit_id",
+    "mode",
+    "state",
+    "occurred_at"
+  ],
+  "properties": {
+    "version": {
+      "const": "availability.v1"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "game_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "unit_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "mode": {
+      "enum": [
+        "purchase",
+        "rental"
+      ]
+    },
+    "state": {
+      "enum": [
+        "available",
+        "unavailable",
+        "sold"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "owner": "commerce",
+  "version": 1,
+  "status": "active"
+}

@@ -39,13 +39,9 @@ class InMemorySessionStore:
         self._session_processing_locks: dict[UUID, tuple[LockType, int]] = {}
 
     @contextmanager
-    def session_processing_lock(
-        self, session_id: UUID
-    ) -> Generator[None]:
+    def session_processing_lock(self, session_id: UUID) -> Generator[None]:
         with self._session_lock_guard:
-            lock, users = self._session_processing_locks.get(
-                session_id, (Lock(), 0)
-            )
+            lock, users = self._session_processing_locks.get(session_id, (Lock(), 0))
             self._session_processing_locks[session_id] = (lock, users + 1)
         try:
             with lock:
@@ -101,17 +97,19 @@ class InMemorySessionStore:
                         (
                             message.channel,
                             message.update_id,
-                            hashlib.sha256(message.external_user_id.encode()).hexdigest(),
-                            hashlib.sha256(message.external_chat_id.encode()).hexdigest(),
+                            hashlib.sha256(
+                                message.external_user_id.encode()
+                            ).hexdigest(),
+                            hashlib.sha256(
+                                message.external_chat_id.encode()
+                            ).hexdigest(),
                             message.message_id,
                         )
                     )
                     return MessageClaim("reconciliation", existing["session_id"])
                 status = existing["status"]
                 if status == "processed":
-                    return MessageClaim(
-                        "duplicate", existing["session_id"]
-                    )
+                    return MessageClaim("duplicate", existing["session_id"])
                 if status == "reconciliation":
                     return MessageClaim("reconciliation")
                 if existing["lease_until"] > now:
@@ -199,9 +197,7 @@ class InMemorySessionStore:
                 if context_game_id is not None:
                     session["context_game_id"] = context_game_id
             session_id = cast(UUID, session["id"])
-            session_context_game_id = cast(
-                UUID | None, session["context_game_id"]
-            )
+            session_context_game_id = cast(UUID | None, session["context_game_id"])
             if context_reference_hash is not None and not context_reference_replayed:
                 self._context_reference_uses[context_reference_hash] = session_id
             processing_lease_token = uuid4()
@@ -317,14 +313,18 @@ class InMemorySessionStore:
             replies: list[OutboxReply] = []
             records = sorted(
                 self._messages.items(),
-                key=lambda item: item[1].get("received_at", datetime.min.replace(tzinfo=UTC)),
+                key=lambda item: item[1].get(
+                    "received_at", datetime.min.replace(tzinfo=UTC)
+                ),
             )
             for (channel, update_id), record in records:
                 if len(replies) >= limit:
                     break
                 if channel == "telegram" and self._claimable_reply(record, now):
                     replies.append(
-                        self._lease_reply(record, channel, update_id, now, lease_seconds)
+                        self._lease_reply(
+                            record, channel, update_id, now, lease_seconds
+                        )
                     )
             return replies
 
@@ -469,8 +469,7 @@ class SessionSimulator:
             or not text
             or len(text) > 4096
             or any(
-                ord(character) < 32 and character not in "\t\r\n"
-                for character in text
+                ord(character) < 32 and character not in "\t\r\n" for character in text
             )
         ):
             raise ValueError("invalid_message_text")
@@ -489,3 +488,27 @@ class SessionSimulator:
             context_reference=game_reference,
         )
         return self.workflow.handle(message)
+
+
+class DemandNotificationSimulator:
+    """Explicit transport acknowledgments for the same durable notification work."""
+
+    def __init__(self) -> None:
+        self.delivered: list[tuple[str, str]] = []
+
+    def drain(self, service, repository) -> None:
+        service.process_events()
+        for notification in service.claim(channel="simulator"):
+            with repository.delivery_guard(notification) as valid:
+                if not valid:
+                    continue
+                try:
+                    notice = service.prepare(notification)
+                except Exception:
+                    repository.retry(notification)
+                    continue
+                if notice is None:
+                    repository.retry(notification, suppressed=True)
+                    continue
+                self.delivered.append((notification.chat_id, notice))
+                repository.complete(notification)

@@ -4,7 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     pixel_telegram_allowed_user_ids: str = ""
     pixel_telegram_webhook_max_body_bytes: int = Field(default=65536, ge=1024, le=1048576)
     pixel_telegram_message_max_age_seconds: int = Field(default=900, ge=60, le=3600)
+    pixel_demand_contact_retention_days: int = Field(default=30, ge=1, le=365)
+    pixel_demand_audit_retention_days: int = Field(default=180, ge=180, le=3650)
     pixel_telegram_retention_days: int = Field(default=30, ge=1, le=365)
     pixel_max_failed_refinement_rounds: int = Field(default=3, ge=1, le=10)
     pixel_telegram_typing_threshold_seconds: float = Field(default=3.0, ge=0.1, le=30)
@@ -58,6 +60,15 @@ class Settings(BaseSettings):
     )
     pixel_ai_reservation_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     pixel_ai_ledger_retention_days: int = Field(default=180, ge=180, le=180)
+
+    @model_validator(mode="after")
+    def demand_retention_is_ordered(self):
+        if (
+            self.pixel_demand_contact_retention_days
+            > self.pixel_demand_audit_retention_days
+        ):
+            raise ValueError("demand contact retention must not exceed audit retention")
+        return self
 
     @field_validator("app_version")
     @classmethod

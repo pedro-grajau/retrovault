@@ -1,0 +1,42 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "state_machine": "unmet-demand",
+  "initial": "proposed",
+  "transitions": [
+    {
+      "from": "proposed",
+      "to": "active",
+      "guard": "explicit-owner-consent"
+    },
+    {
+      "from": [
+        "proposed",
+        "active"
+      ],
+      "to": "cancelled",
+      "guard": "owner-and-channel"
+    },
+    {
+      "from": "active",
+      "to": "notified",
+      "guard": "first-transport-confirmed-notice-and-current-lease"
+    },
+    {
+      "from": "active",
+      "to": "sold",
+      "guard": "explicit-sale-event-and-no-other-eligible-unit"
+    }
+  ],
+  "terminal": [
+    "cancelled",
+    "notified",
+    "sold"
+  ],
+  "temporary_unavailability": "suppress-notice-preserve-active-demand",
+  "new_notice": "requires-new-consent",
+  "contact_retention_days": 30,
+  "audit_retention_days": 180,
+  "independent_of_session_cascade": true
+}

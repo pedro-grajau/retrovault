@@ -39,6 +39,9 @@ class IntentDecision:
     rejections: tuple[IntentRejection, ...] = ()
     rejection_ambiguous: bool = False
     price_range_updated: bool = False
+    demand_action: str = "none"
+    demand_title: str | None = None
+    demand_id: str | None = None
 
 
 class IntentExtractionService:
@@ -129,9 +132,8 @@ class IntentExtractionService:
                 reserved_cost_usd=reserved_cost,
                 monthly_budget_usd=self.pricing.monthly_budget_usd,
                 now=current,
-                expires_at=current + timedelta(
-                    seconds=self.pricing.reservation_ttl_seconds
-                ),
+                expires_at=current
+                + timedelta(seconds=self.pricing.reservation_ttl_seconds),
             )
         except AiLedgerUnavailable:
             return self._fallback(prior, update_id, correlation_id, safety)
@@ -184,11 +186,9 @@ class IntentExtractionService:
 
         try:
             extracted = IntentExtractionPayload.from_json(result.output_json)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return self._fallback(prior, update_id, correlation_id, safety)
-        allowed_ids = {
-            UUID(item["game_id"]) for item in safe_previous_options or []
-        }
+        allowed_ids = {UUID(item["game_id"]) for item in safe_previous_options or []}
         if extracted.rejections and (
             not allowed_ids
             or any(item.game_id not in allowed_ids for item in extracted.rejections)
@@ -202,6 +202,9 @@ class IntentExtractionService:
             update_id,
             correlation_id,
             safety,
+            demand_action=extracted.demand_action,
+            demand_title=extracted.demand_title,
+            demand_id=extracted.demand_id,
             rejections=extracted.rejections,
             rejection_ambiguous=extracted.rejection_ambiguous,
             price_range_updated=(
@@ -226,7 +229,7 @@ class IntentExtractionService:
                 return None
             try:
                 game_id = UUID(item["game_id"])
-            except (ValueError, TypeError, AttributeError):
+            except ValueError, TypeError, AttributeError:
                 return None
             title = item["title"]
             if type(title) is not str:
@@ -276,6 +279,9 @@ class IntentExtractionService:
         rejections: tuple[IntentRejection, ...] = (),
         rejection_ambiguous: bool = False,
         price_range_updated: bool = False,
+        demand_action: str = "none",
+        demand_title: str | None = None,
+        demand_id: str | None = None,
     ) -> IntentDecision:
         provenance = IntentProvenance(
             intent_version=INTENT_VERSION,
@@ -294,4 +300,7 @@ class IntentExtractionService:
             rejections,
             rejection_ambiguous,
             price_range_updated,
+            demand_action,
+            demand_title,
+            demand_id,
         )

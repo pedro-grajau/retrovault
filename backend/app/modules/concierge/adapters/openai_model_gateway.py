@@ -21,7 +21,7 @@ _PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "application"
     / "prompts"
-    / "intent-extraction.v3.md"
+    / "intent-extraction.v4.md"
 )
 _RANKING_PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -48,7 +48,14 @@ def strict_intent_schema() -> dict[str, Any]:
                 {"type": "null"},
             ]
         }
+
     properties = {
+        "demand_action": {
+            "type": "string",
+            "enum": ["none", "register", "list", "cancel"],
+        },
+        "demand_title": nullable_text(200),
+        "demand_id": nullable_text(36),
         "platform": nullable_text(48),
         "genre": nullable_text(64),
         "style": nullable_text(96),
@@ -72,7 +79,11 @@ def strict_intent_schema() -> dict[str, Any]:
             "items": {
                 "type": "string",
                 "enum": [
-                    "platform", "genre", "style", "players", "price_range",
+                    "platform",
+                    "genre",
+                    "style",
+                    "players",
+                    "price_range",
                     "constraints",
                 ],
             },
@@ -99,8 +110,14 @@ def strict_intent_schema() -> dict[str, Any]:
                     "reason": {
                         "type": "string",
                         "enum": [
-                            "price", "platform", "genre", "style", "condition",
-                            "availability", "players", "other",
+                            "price",
+                            "platform",
+                            "genre",
+                            "style",
+                            "condition",
+                            "availability",
+                            "players",
+                            "other",
                         ],
                     },
                 },
@@ -176,16 +193,16 @@ class OpenAIModelGateway:
     ) -> ModelExtraction:
         try:
             response = self.client.responses.create(
-                **self._request_payload(message_text, previous_intent, previous_options),
+                **self._request_payload(
+                    message_text, previous_intent, previous_options
+                ),
                 extra_headers={"X-Client-Request-Id": str(correlation_id)},
             )
         except APIStatusError as exc:
             raise ModelCallFailure(
-                conclusive=(
-                    exc.status_code < 500 and exc.status_code not in {408, 409}
-                )
+                conclusive=(exc.status_code < 500 and exc.status_code not in {408, 409})
             ) from None
-        except (APIConnectionError, APITimeoutError):
+        except APIConnectionError, APITimeoutError:
             raise ModelCallFailure(conclusive=False) from None
         except Exception:
             # Do not include request or provider text in logs or surfaced errors.
@@ -249,7 +266,8 @@ class OpenAIModelGateway:
                         + json.dumps(
                             {
                                 "intent": json.loads(previous_json),
-                                "options_from_previous_recommendation": previous_options or [],
+                                "options_from_previous_recommendation": previous_options
+                                or [],
                             },
                             ensure_ascii=False,
                             separators=(",", ":"),
@@ -261,7 +279,7 @@ class OpenAIModelGateway:
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "concierge_intent_v3",
+                    "name": "concierge_intent_v4",
                     "strict": True,
                     "schema": strict_intent_schema(),
                 }
@@ -292,11 +310,9 @@ class OpenAIModelGateway:
             )
         except APIStatusError as exc:
             raise ModelCallFailure(
-                conclusive=(
-                    exc.status_code < 500 and exc.status_code not in {408, 409}
-                )
+                conclusive=(exc.status_code < 500 and exc.status_code not in {408, 409})
             ) from None
-        except (APIConnectionError, APITimeoutError):
+        except APIConnectionError, APITimeoutError:
             raise ModelCallFailure(conclusive=False) from None
         except Exception:
             raise ModelCallFailure(conclusive=False) from None
