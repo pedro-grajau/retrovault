@@ -10,7 +10,8 @@
     "intent-revisions",
     "refinement-ledger",
     "last-recommendation-plan",
-    "candidate-evidence"
+    "candidate-evidence",
+    "sanitized-demand-clarification-draft"
   ],
   "intent_contract": "intent.v2.json",
   "refinement_contract": "refinement.v1.json",

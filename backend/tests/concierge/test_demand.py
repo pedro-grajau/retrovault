@@ -7,6 +7,7 @@ from threading import Lock
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.modules.catalog.ports.repository import CatalogReadUnavailable
@@ -104,7 +105,8 @@ class MemoryDemands:
         d = self.rows.get(demand_id)
         if d is None or d.owner_key != owner_key or d.channel != channel:
             return False
-        self.rows[d.id] = replace(d, status="cancelled")
+        if d.status in {"proposed", "active"}:
+            self.rows[d.id] = replace(d, status="cancelled")
         return True
 
     def active(self):
@@ -208,7 +210,8 @@ def test_only_owner_can_cancel_and_repeat_cancellation_is_factual():
     assert "não encontrado" in reply and d.title not in reply
     assert service.store.rows[d.id].status == "active"
     for update in (4, 5):
-        assert "Interesse cancelado" in service.handle(
+        expected = "Interesse encerrado" if update == 4 else "já estava encerrado"
+        assert expected in service.handle(
             message(f"/cancelar_demanda {d.id}", update), uuid4()
         )
 
@@ -288,7 +291,7 @@ def test_workflow_commands_available_without_ai_and_preserve_refinements():
     assert service.store.rows[d.id].status == "active"
     assert "Chrono Trigger" in simulator.send("owner", "/demandas").reply_text
     assert (
-        "cancelado" in simulator.send("owner", f"/cancelar_demanda {d.id}").reply_text
+        "encerrado" in simulator.send("owner", f"/cancelar_demanda {d.id}").reply_text
     )
 
 
@@ -359,7 +362,7 @@ def test_whitespace_commands_parse_tabs_and_newlines_consistently():
     assert "registrado" in service.handle(
         message(f"/confirmar_demanda\n{d.id}", 2), uuid4()
     )
-    assert "cancelado" in service.handle(
+    assert "encerrado" in service.handle(
         message(f"/cancelar_demanda\t{d.id}", 3), uuid4()
     )
 
@@ -466,7 +469,7 @@ def test_v4_natural_actions_use_budgeted_extraction_and_preserve_conversation():
     payload["demand_id"] = str(d.id)
     gateway.output_json = json.dumps(payload)
     assert (
-        "cancelado"
+        "encerrado"
         in simulator.send("owner", f"Cancele meu interesse {d.id}").reply_text
     )
     state = saver.get_tuple(
@@ -477,3 +480,114 @@ def test_v4_natural_actions_use_budgeted_extraction_and_preserve_conversation():
     )
     assert state["refinement_state"]["version"]
     assert ledger.reserve_calls == 3 and gateway.provider_calls == 3
+
+
+@pytest.mark.parametrize("status", ["cancelled", "notified", "sold"])
+def test_cancel_already_closed_interest_reports_original_state(status):
+    service = setup()
+    demand = register(service)
+    service.store.rows[demand.id] = replace(demand, status=status)
+    reply = service.handle(message(f"/cancelar_demanda {demand.id}", 3), uuid4())
+    assert "já estava encerrado" in reply
+    assert service.store.rows[demand.id].status == status
+    assert "não encontrado" in service.handle(
+        message(f"/cancelar_demanda {demand.id}", 4, user="other"), uuid4()
+    )
+
+
+def test_natural_demand_clarifies_missing_fields_and_preserves_searches():
+    from app.modules.concierge.ports.recommendations import RecommendationOutcome
+    from tests.concierge.test_intent_extraction import (
+        FakeGateway,
+        FakeLedger,
+        extraction_json,
+    )
+    from tests.concierge.test_intent_extraction import service as extraction_service
+
+    service = setup()
+    gateway, ledger = FakeGateway(), FakeLedger()
+    saver = InMemorySaver()
+
+    @contextmanager
+    def checkpoints():
+        yield saver
+
+    class Recommendations:
+        calls = 0
+
+        def recommend(self, *args, **kwargs):
+            self.calls += 1
+            return RecommendationOutcome(
+                "empty", "Resultado da busca no catálogo.", None
+            )
+
+    recommendations = Recommendations()
+    workflow = SessionWorkflow(
+        InMemorySessionStore(),
+        ContextReferenceService(service.catalog, "test", 1800),
+        checkpoints,
+        demand_service=service,
+        intent_extraction=extraction_service(gateway, ledger),
+        recommendations=recommendations,
+    )
+    simulator = SessionSimulator(workflow)
+
+    def output(action="none", title=None, **extra):
+        gateway.output_json = extraction_json(
+            cleared_fields=[],
+            rejections=[],
+            rejection_ambiguous=False,
+            demand_action=action,
+            demand_title=title,
+            demand_id=None,
+            **extra,
+        )
+
+    output("none", title="Chrono Trigger", platform="SNES", mode="purchase")
+    search = simulator.send("owner", "Quero conhecer Chrono Trigger para SNES, compra")
+    assert "Resultado da busca" in search.reply_text
+    assert not service.store.rows and recommendations.calls == 1
+
+    output("register")
+    first = simulator.send("owner", "Quero acompanhar a disponibilidade de um jogo")
+    assert "Qual é o título" in first.reply_text
+    assert not service.store.rows
+
+    output("none", title="Chrono Trigger")
+    assert "Qual é a plataforma" in simulator.send("owner", "Chrono Trigger").reply_text
+    output("none", platform="SNES")
+    assert "compra ou aluguel" in simulator.send("owner", "SNES").reply_text
+    state = saver.get_tuple(
+        {"configurable": {"thread_id": str(first.session_id)}}
+    ).checkpoint["channel_values"]
+    assert state["demand_draft"] == {"title": "Chrono Trigger", "platform": "SNES"}
+
+    output("none")
+    assert (
+        "compra ou aluguel" in simulator.send("owner", "Compra ou aluguel").reply_text
+    )
+    assert not service.store.rows
+
+    output("none", genre="Aventura", mode="rental")
+    assert (
+        "Resultado da busca"
+        in simulator.send(
+            "owner", "Recomende jogos de aventura para aluguel"
+        ).reply_text
+    )
+    assert recommendations.calls == 2 and not service.store.rows
+
+    output("none", mode="rental")
+    reply = simulator.send("owner", "Aluguel")
+    demand = next(iter(service.store.rows.values()))
+    assert (demand.title, demand.platform, demand.mode, demand.status) == (
+        "Chrono Trigger",
+        "SNES",
+        "rental",
+        "proposed",
+    )
+    assert "/confirmar_demanda" in reply.reply_text
+    state = saver.get_tuple(
+        {"configurable": {"thread_id": str(first.session_id)}}
+    ).checkpoint["channel_values"]
+    assert state["demand_draft"] is None

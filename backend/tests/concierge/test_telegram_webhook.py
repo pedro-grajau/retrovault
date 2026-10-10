@@ -310,17 +310,18 @@ async def test_webhook_ignores_json_integer_exceeding_python_digit_limit(webhook
 @pytest.mark.anyio
 async def test_stale_and_out_of_order_updates_only_enter_reconciliation(webhook) -> None:  # type: ignore[no-untyped-def]
     app, store, messenger, _ = webhook
+    sent_at = int(time.time())
     stale = await post_update(
         app,
-        telegram_update(update_id=30, sent_at=int(time.time()) - 901),
+        telegram_update(update_id=30, sent_at=sent_at - 901),
     )
     first = await post_update(
         app,
-        telegram_update(update_id=31, message_id=5),
+        telegram_update(update_id=31, message_id=5, sent_at=sent_at),
     )
     out_of_order = await post_update(
         app,
-        telegram_update(update_id=32, message_id=4),
+        telegram_update(update_id=32, message_id=4, sent_at=sent_at),
     )
 
     assert stale.json()["status"] == "reconciliation"
@@ -502,8 +503,20 @@ async def test_app_lifespan_redrives_pending_reply_and_marks_it_delivered(
         SimpleNamespace(
             pixel_telegram_bot_token=SecretStr("test-token"),
             pixel_telegram_retention_days=30,
+            pixel_demand_contact_retention_days=30,
+            pixel_demand_audit_retention_days=180,
             pixel_ai_ledger_retention_days=180,
         ),
+    )
+
+    demand_purges = []
+    monkeypatch.setattr(
+        app_main, "_demand_repository",
+        SimpleNamespace(purge=lambda **kwargs: demand_purges.append(kwargs)),
+    )
+    monkeypatch.setattr(
+        app_main, "_demand_notifications",
+        SimpleNamespace(process_events=lambda: None, claim=lambda **_: []),
     )
 
     async def in_process_to_thread(function, *args, **kwargs):
@@ -523,6 +536,8 @@ async def test_app_lifespan_redrives_pending_reply_and_marks_it_delivered(
 
     assert messenger.messages == [("12345", "Resposta pendente")]
     assert repository.marked_updates == [reply.update_id]
+    assert demand_purges
+    assert all(purge == {"contact_days": 30, "audit_days": 180} for purge in demand_purges)
 
 
 def test_background_redrive_sends_and_persists_fresh_commerce_result(monkeypatch) -> None:  # type: ignore[no-untyped-def]

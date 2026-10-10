@@ -26,6 +26,7 @@ from app.modules.concierge.application.intent_extraction import (
     IntentDecision,
     IntentExtractionService,
 )
+from app.modules.concierge.domain.demand import clean_description, normalize
 from app.modules.concierge.domain.intent import (
     INTENT_VERSION,
     PROMPT_VERSION,
@@ -62,6 +63,74 @@ _GREETING = re.compile(
     r"^(?:oi|olá|ola|bom dia|boa tarde|boa noite|e aí|eai|eae)[.!?\s]*$",
     re.IGNORECASE,
 )
+_DEMAND_MODE_ALIASES = {
+    "compra": "purchase",
+    "comprar": "purchase",
+    "purchase": "purchase",
+    "aluguel": "rental",
+    "alugar": "rental",
+    "rental": "rental",
+}
+
+
+def _is_demand_answer(text: str, title: str | None, platform: str | None) -> bool:
+    answer = normalize(text)
+    for value in (title, platform):
+        if value:
+            answer = answer.replace(normalize(value), " ")
+    words = set(re.findall(r"[a-z]+", answer))
+    # A short field answer may continue the draft; a fresh search must retain
+    # normal recommendation routing even if it mentions a platform or mode.
+    return words <= set(_DEMAND_MODE_ALIASES) | {
+        "eu",
+        "quero",
+        "prefiro",
+        "para",
+        "por",
+        "favor",
+        "a",
+        "o",
+        "um",
+        "uma",
+        "de",
+        "e",
+        "ou",
+        "na",
+        "no",
+        "em",
+        "plataforma",
+        "titulo",
+        "jogo",
+        "modalidade",
+        "sim",
+        "isso",
+    }
+
+
+def _restored_demand_draft(value: object) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    title = value.get("title")
+    platform = value.get("platform")
+    mode = value.get("mode")
+    restored: dict[str, str] = {}
+    if isinstance(title, str) and title:
+        restored["title"] = clean_description(title)
+    if isinstance(platform, str) and platform:
+        restored["platform"] = clean_description(platform, maximum=48)
+    if isinstance(mode, str) and mode in {"purchase", "rental"}:
+        restored["mode"] = mode
+    return restored
+
+
+def _demand_clarification(draft: dict[str, str]) -> str:
+    if not draft.get("title"):
+        return "Qual é o título que você quer acompanhar?"
+    if not draft.get("platform"):
+        return f"Qual é a plataforma de {draft['title']}?"
+    if not draft.get("mode"):
+        return "Você quer receber o aviso para compra ou aluguel?"
+    raise ValueError("complete_demand_draft_has_no_clarification")
 
 
 class SessionState(TypedDict):
@@ -73,6 +142,7 @@ class SessionState(TypedDict):
     invalid_context_reference: NotRequired[bool]
     command: NotRequired[str]
     demand_reply: NotRequired[str | None]
+    demand_draft: NotRequired[dict[str, str] | None]
     handoff_status: NotRequired[str]
     prepared_intent: NotRequired[dict[str, object]]
     prepared_provenance: NotRequired[dict[str, object]]
@@ -223,6 +293,8 @@ def _entry_node(state: SessionState) -> dict[str, object]:
         updates["intent_provenance"] = state["prepared_provenance"]
     if "prepared_refinement_state" in state:
         updates["refinement_state"] = state["prepared_refinement_state"]
+    if "demand_draft" in state:
+        updates["demand_draft"] = state["demand_draft"]
     return updates
 
 
@@ -408,6 +480,7 @@ class SessionWorkflow:
                 ),
                 "command": command,
                 "demand_reply": None,
+                "demand_draft": None,
                 "extraction_status": "skipped",
                 "prepared_recommendation": None,
                 "recommendation_context": None,
@@ -427,6 +500,9 @@ class SessionWorkflow:
                 already_processed = (
                     prior_state.get("last_processed_update_id") == message.update_id
                 )
+                pending_demand = _restored_demand_draft(prior_state.get("demand_draft"))
+                if command != "demand":
+                    initial_state["demand_draft"] = pending_demand
                 prior_intent = Intent.from_dict(prior_state.get("intent")) or Intent()
                 # Rewriting the safe canonical form also replaces legacy checkpoints
                 # whose individual fields contained sensitive text.
@@ -480,20 +556,87 @@ class SessionWorkflow:
                     )
                     if (
                         decision.status == "accepted"
-                        and decision.demand_action != "none"
                         and self.demand_service is not None
                     ):
                         if decision.demand_action == "list":
-                            demand_text = "/demandas"
+                            initial_state["demand_draft"] = None
+                            initial_state["demand_reply"] = self.demand_service.handle(
+                                replace(message, text="/demandas"), claim.session_id
+                            )
                         elif decision.demand_action == "cancel":
+                            initial_state["demand_draft"] = None
                             demand_text = (
                                 f"/cancelar_demanda {decision.demand_id or ''}"
                             )
-                        else:
-                            demand_text = f"/demanda {decision.demand_title or ''} | {decision.intent.platform or ''} | {decision.intent.mode or ''}"
-                        initial_state["demand_reply"] = self.demand_service.handle(
-                            replace(message, text=demand_text), claim.session_id
-                        )
+                            initial_state["demand_reply"] = self.demand_service.handle(
+                                replace(message, text=demand_text), claim.session_id
+                            )
+                        elif decision.demand_action == "register" or (
+                            pending_demand is not None
+                            and _is_demand_answer(
+                                message.text,
+                                decision.demand_title,
+                                decision.intent.platform,
+                            )
+                        ):
+                            draft = dict(pending_demand or {})
+                            normalized_message = normalize(message.text)
+                            if decision.demand_action == "register":
+                                draft = {}
+                            if (
+                                decision.demand_title
+                                and normalize(decision.demand_title)
+                                in normalized_message
+                            ):
+                                draft["title"] = clean_description(
+                                    decision.demand_title
+                                )
+                            if (
+                                decision.intent.platform
+                                and normalize(decision.intent.platform)
+                                in normalized_message
+                            ):
+                                draft["platform"] = clean_description(
+                                    decision.intent.platform, maximum=48
+                                )
+                            words = set(re.findall(r"[a-z]+", normalized_message))
+                            expressed_modes = {
+                                _DEMAND_MODE_ALIASES[word]
+                                for word in words
+                                if word in _DEMAND_MODE_ALIASES
+                            }
+                            explicit_mode = (
+                                next(iter(expressed_modes))
+                                if len(expressed_modes) == 1
+                                else None
+                            )
+                            if explicit_mode:
+                                draft["mode"] = explicit_mode
+                            responds_to_demand = (
+                                decision.demand_action == "register"
+                                or draft != pending_demand
+                                or (bool(expressed_modes) and not draft.get("mode"))
+                            )
+                            if responds_to_demand and all(
+                                draft.get(field)
+                                for field in ("title", "platform", "mode")
+                            ):
+                                demand_text = (
+                                    f"/demanda {draft['title']} | {draft['platform']} | "
+                                    f"{'compra' if draft['mode'] == 'purchase' else 'aluguel'}"
+                                )
+                                initial_state["demand_reply"] = (
+                                    self.demand_service.handle(
+                                        replace(message, text=demand_text),
+                                        claim.session_id,
+                                    )
+                                )
+                                initial_state["demand_draft"] = None
+                            elif responds_to_demand:
+                                initial_state["demand_reply"] = _demand_clarification(
+                                    draft
+                                )
+                                initial_state["demand_draft"] = draft
                     allowed_rejections = {
                         item["game_id"] for item in previous_options or []
                     }

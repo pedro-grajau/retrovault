@@ -99,11 +99,18 @@ class DemandService:
                 except ValueError:
                     return "Informe o código do interesse mostrado na confirmação ou em /demandas."
                 if command == "/cancelar_demanda":
+                    owned = self.store.get_owned(
+                        demand_id, owner_key=owner, channel=message.channel
+                    )
+                    if owned is None:
+                        return "Interesse não encontrado para você neste canal."
+                    if owned.status not in {"proposed", "active"}:
+                        return "Este interesse já estava encerrado. Você não receberá novos avisos."
                     cancelled = self.store.cancel(
                         demand_id, owner_key=owner, channel=message.channel
                     )
                     return (
-                        "Interesse cancelado. Você não receberá novos avisos."
+                        "Interesse encerrado. Você não receberá novos avisos."
                         if cancelled
                         else "Interesse não encontrado para você neste canal."
                     )

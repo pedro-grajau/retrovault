@@ -245,3 +245,27 @@ def test_deliver_demand_transport_paths_are_guarded_off_event_loop(
         "ack_failed": ["guard", "transport", "complete"],
     }[outcome]
     assert actions == expected
+
+
+@pytest.mark.parametrize("field", ["title", "platform"])
+def test_bound_title_and_platform_changes_block_new_and_queued_notices(field):
+    from dataclasses import replace
+
+    service, demand, game = context()
+    service.store.rows[demand.id] = replace(demand, game_id=game.id)
+    service.offers.units = 1
+    events = Events(event(game))
+    worker = DemandNotificationService(service, events)
+    worker.process_events()
+    assert len(service.store.queued) == 1
+    notice = DemandNotification(
+        uuid4(), service.store.rows[demand.id], "owner", events.event.id, uuid4(), 1
+    )
+    assert worker.prepare(notice) is not None
+    setattr(game, field, "Outro título" if field == "title" else "PlayStation 2")
+    events.event = event(game)
+    worker.process_events()
+    assert len(service.store.queued) == 1
+    assert worker.prepare(notice) is None
+    assert service.store.rows[demand.id].status == "active"
+    assert not events.completed[-1].get("retry")

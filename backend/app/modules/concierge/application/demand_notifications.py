@@ -37,7 +37,12 @@ class DemandNotificationService:
                         ):
                             continue
                         if demand.game_id is not None:
-                            matches = demand.game_id == game.id
+                            matches = (
+                                demand.game_id == game.id
+                                and normalize(demand.title) == normalize(game.title)
+                                and normalize(demand.platform)
+                                == normalize(game.platform)
+                            )
                         else:
                             matches = (
                                 normalize(demand.title) == normalize(game.title)
@@ -133,7 +138,11 @@ class DemandNotificationService:
         if game_id is None:
             return None
         game = self.demands.catalog.get_game(game_id)
-        if game is None:
+        if (
+            game is None
+            or normalize(game.title) != normalize(notification.demand.title)
+            or normalize(game.platform) != normalize(notification.demand.platform)
+        ):
             return None
         offers = [
             offer

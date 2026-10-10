@@ -15,7 +15,12 @@ class PostgresEventReader:
         with self.engine.begin() as conn:
             conn.execute(
                 text("""INSERT INTO platform.event_consumptions(consumer,event_id)
-              SELECT :consumer,id FROM platform.outbox_events WHERE topic LIKE 'catalog.%' OR topic LIKE 'commerce.availability.%'
+              SELECT :consumer,e.id FROM platform.outbox_events e
+              WHERE (e.topic LIKE 'catalog.%' OR e.topic LIKE 'commerce.availability.%')
+                AND NOT EXISTS (
+                  SELECT 1 FROM platform.event_consumptions c
+                  WHERE c.consumer=:consumer AND c.event_id=e.id
+                )
               ON CONFLICT DO NOTHING"""),
                 {"consumer": consumer},
             )
