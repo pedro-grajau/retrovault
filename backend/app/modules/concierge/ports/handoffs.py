@@ -19,6 +19,7 @@ class HandoffStore(Protocol):
         correlation_id: UUID,
         target_chat_id: str,
         notification_text: str,
+        context_snapshot: dict[str, object] | None = None,
         now: datetime,
     ) -> bool: ...
 

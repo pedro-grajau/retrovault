@@ -52,6 +52,10 @@ class SessionStore(Protocol):
         recommendation_context: dict[str, object] | None = None,
     ) -> None: ...
 
+    def latest_delivered_recommendation(
+        self, session_id: UUID
+    ) -> dict[str, object] | None: ...
+
     def claim_reply(
         self,
         update_id: int,

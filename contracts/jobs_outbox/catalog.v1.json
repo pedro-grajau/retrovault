@@ -1,1 +1,33 @@
-{"owner":"platform","version":1,"status":"active","contracts":[{"event":"catalog.game.published.v1","table":"platform.outbox_events","transaction":"same-as-catalog-publication","delivery":"at-least-once","idempotency_key":"event_id"},{"event":"catalog.game.retired.v1","table":"platform.outbox_events","transaction":"same-as-catalog-retirement","delivery":"at-least-once","idempotency_key":"event_id"}],"lease_worker":"deferred-to-jobs-story"}
+{
+  "owner": "platform",
+  "version": 1,
+  "status": "active",
+  "contracts": [
+    {
+      "event": "catalog.game.published.v1",
+      "table": "platform.outbox_events",
+      "transaction": "same-as-catalog-publication",
+      "delivery": "at-least-once",
+      "idempotency_key": "event_id"
+    },
+    {
+      "event": "catalog.game.retired.v1",
+      "table": "platform.outbox_events",
+      "transaction": "same-as-catalog-retirement",
+      "delivery": "at-least-once",
+      "idempotency_key": "event_id"
+    },
+    {
+      "event": "commerce.availability.v1",
+      "table": "platform.outbox_events",
+      "transaction": "same-as-unit-state-change",
+      "delivery": "at-least-once",
+      "idempotency_key": "event_id"
+    }
+  ],
+  "lease_worker": "consumer-specific-leases-fenced-by-token",
+  "consumer": "concierge.demands.v1",
+  "retry_limit": 5,
+  "unknown_version": "dead-letter",
+  "notification_deduplication": "demand_id-and-event_id"
+}

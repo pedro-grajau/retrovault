@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal, cast
 from uuid import UUID
@@ -10,6 +11,11 @@ from app.modules.concierge.domain.intent import Intent
 
 RECOMMENDATION_VERSION = "recommendation.v1"
 RANKING_PROMPT_VERSION = "recommendation-ranking.v1"
+_DELIVERED_GAME_LINK = re.compile(
+    r"(?m)^[ \t]*https?://[^\s]+/games/"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[ \t]*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,8 @@ class RecommendationPlan:
     ranking: tuple[RankedGame, ...]
     revalidation: dict[str, object] | None = None
     greeting_required: bool = False
+    reused_previous_options: bool = False
+    presented_game_ids: tuple[UUID, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -152,15 +160,23 @@ class RecommendationPlan:
             ],
             "revalidation": self.revalidation,
             "greeting_required": self.greeting_required,
+            "reused_previous_options": self.reused_previous_options,
+            "presented_game_ids": [str(game_id) for game_id in self.presented_game_ids],
         }
 
     @classmethod
     def from_dict(cls, value: object) -> RecommendationPlan | None:
         """Parse only the application-owned JSON shape persisted in the outbox."""
-        if type(value) is not dict or set(value) != {
+        required_keys = {
             "version", "provenance", "intent", "candidates", "ranking", "revalidation",
             "greeting_required",
-        }:
+        }
+        optional_keys = {"reused_previous_options", "presented_game_ids"}
+        if (
+            type(value) is not dict
+            or not required_keys.issubset(value)
+            or not set(value).issubset(required_keys | optional_keys)
+        ):
             return None
         raw = cast(dict[str, object], value)
         if raw["version"] != RECOMMENDATION_VERSION:
@@ -210,6 +226,29 @@ class RecommendationPlan:
             greeting_required = raw["greeting_required"]
             if type(greeting_required) is not bool:
                 return None
+            reused_previous_options = raw.get("reused_previous_options", False)
+            if type(reused_previous_options) is not bool:
+                return None
+            presented_raw = raw.get("presented_game_ids", [])
+            if (
+                type(presented_raw) is not list
+                or len(presented_raw) > 3
+                or any(type(item) is not str for item in presented_raw)
+            ):
+                return None
+            presented_raw = cast(list[str], presented_raw)
+            presented_game_ids = tuple(UUID(item) for item in presented_raw)
+            if (
+                len(set(presented_game_ids)) != len(presented_game_ids)
+                or any(
+                    str(game_id) != raw_id
+                    for game_id, raw_id in zip(presented_game_ids, presented_raw, strict=True)
+                )
+                or not set(presented_game_ids).issubset(
+                    {item.game_id for item in ranking}
+                )
+            ):
+                return None
             return cls(
                 provenance,
                 intent,
@@ -217,9 +256,36 @@ class RecommendationPlan:
                 ranking,
                 cast(dict[str, object] | None, revalidation),
                 greeting_required,
+                reused_previous_options,
+                presented_game_ids,
             )
         except (KeyError, ValueError, TypeError):
             return None
+
+
+def restore_legacy_presented_game_ids(
+    context: object, delivered_text: str
+) -> dict[str, object] | None:
+    """Recover presented IDs from delivered links in contexts predating the field."""
+    if type(context) is not dict:
+        return None
+    if "presented_game_ids" in context:
+        return cast(dict[str, object], context)
+    plan = RecommendationPlan.from_dict(context)
+    if plan is None:
+        return cast(dict[str, object], context)
+    allowed_ids = {item.game_id for item in plan.ranking}
+    presented: list[str] = []
+    for match in _DELIVERED_GAME_LINK.finditer(delivered_text):
+        try:
+            game_id = UUID(match.group(1))
+        except ValueError:
+            continue
+        if game_id in allowed_ids and str(game_id) not in presented:
+            presented.append(str(game_id))
+    restored = cast(dict[str, object], dict(context))
+    restored["presented_game_ids"] = presented
+    return restored
 
 
 def _required_string(values: dict[str, object], key: str, maximum: int) -> str:

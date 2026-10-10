@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
@@ -91,6 +92,8 @@ class RecommendationService:
         channel: str,
         update_id: int,
         correlation_id: UUID,
+        excluded_game_ids: tuple[UUID, ...] = (),
+        previous_recommendation: object = None,
     ) -> RecommendationOutcome:
         if self.public_site_url == "":
             return RecommendationOutcome("fallback", _FALLBACK)
@@ -113,6 +116,15 @@ class RecommendationService:
                     "ou falar com uma pessoa usando /humano.",
                 )
             return RecommendationOutcome("empty", _NO_MATCH)
+        previous_plan = RecommendationPlan.from_dict(previous_recommendation)
+        discovery_exclusions = tuple(
+            dict.fromkeys(
+                (
+                    *excluded_game_ids,
+                    *(previous_plan.presented_game_ids if previous_plan else ()),
+                )
+            )
+        )
         criteria = RecommendationCriteria(
             query=intent.style,
             platform=intent.platform,
@@ -120,12 +132,25 @@ class RecommendationService:
             mode=intent.mode,
             price_min_brl_cents=intent.price_min_brl_cents,
             price_max_brl_cents=intent.price_max_brl_cents,
+            excluded_game_ids=discovery_exclusions,
         )
         try:
             candidates = self.discovery.recommend_candidates(criteria)
         except Exception:
             return RecommendationOutcome("fallback", _FALLBACK)
         if not candidates:
+            reused = self._reuse_previous(
+                previous_recommendation,
+                intent,
+                update_id=update_id,
+                correlation_id=correlation_id,
+            )
+            if reused is not None:
+                initial_text = self._compose(reused, self._snapshot_map(reused))
+                if initial_text != _FALLBACK:
+                    return RecommendationOutcome(
+                        "accepted", initial_text, reused.to_dict()
+                    )
             return RecommendationOutcome("empty", _NO_MATCH)
         if self.gateway is None or self.ledger is None or not self.pricing.enabled:
             return RecommendationOutcome("fallback", _FALLBACK)
@@ -139,6 +164,18 @@ class RecommendationService:
             if set(candidate.evidence_refs) & _RELEVANCE_REFS
         )
         if not snapshots:
+            reused = self._reuse_previous(
+                previous_recommendation,
+                intent,
+                update_id=update_id,
+                correlation_id=correlation_id,
+            )
+            if reused is not None:
+                initial_text = self._compose(reused, self._snapshot_map(reused))
+                if initial_text != _FALLBACK:
+                    return RecommendationOutcome(
+                        "accepted", initial_text, reused.to_dict()
+                    )
             return RecommendationOutcome("empty", _NO_MATCH)
         allowed_ids = {candidate.game_id for candidate in snapshots}
         model_candidates = [self._model_candidate(candidate) for candidate in snapshots]
@@ -222,6 +259,18 @@ class RecommendationService:
         except (TypeError, ValueError):
             return RecommendationOutcome("fallback", _FALLBACK)
         if not ranking_payload.recommendations:
+            reused = self._reuse_previous(
+                previous_recommendation,
+                intent,
+                update_id=update_id,
+                correlation_id=correlation_id,
+            )
+            if reused is not None:
+                initial_text = self._compose(reused, self._snapshot_map(reused))
+                if initial_text != _FALLBACK:
+                    return RecommendationOutcome(
+                        "accepted", initial_text, reused.to_dict()
+                    )
             return RecommendationOutcome("empty", _NO_RANKED_MATCH)
         by_id = {candidate.game_id: candidate for candidate in snapshots}
         for ranked in ranking_payload.recommendations:
@@ -284,6 +333,26 @@ class RecommendationService:
                         {"game_id": str(ranked.game_id), "status": "catalog_changed"}
                     )
                     continue
+                if (
+                    plan.intent.platform
+                    and not self._same(plan.intent.platform, game.platform)
+                ):
+                    revalidated_facts.append(
+                        {"game_id": str(ranked.game_id), "status": "catalog_changed"}
+                    )
+                    continue
+                current_genre = self._genre(game)
+                if (
+                    plan.intent.genre
+                    and (
+                        current_genre is None
+                        or not self._same(plan.intent.genre, current_genre)
+                    )
+                ):
+                    revalidated_facts.append(
+                        {"game_id": str(ranked.game_id), "status": "catalog_changed"}
+                    )
+                    continue
                 current_offers = self.discovery.get_game_offers(ranked.game_id)
                 saved_offer_ids = {offer.offer_id for offer in saved.offers}
                 offers = tuple(
@@ -315,8 +384,21 @@ class RecommendationService:
                     revalidated_facts.append(
                         {"game_id": str(ranked.game_id), "status": "no_eligible_offer"}
                     )
-            self._save_revalidation(context, checked_at, revalidated_facts)
-            return self._with_greeting(plan, self._compose(plan, fresh))
+            composed = self._compose(plan, fresh)
+            reply_text = self._with_greeting(plan, composed)
+            presented_game_ids = (
+                [
+                    str(item.game_id)
+                    for item in plan.ranking
+                    if item.game_id in fresh
+                ][:3]
+                if composed != _FALLBACK and reply_text != _FALLBACK
+                else []
+            )
+            self._save_revalidation(
+                context, checked_at, revalidated_facts, presented_game_ids
+            )
+            return reply_text
         except Exception:
             if not revalidated_facts and plan.ranking:
                 revalidated_facts.append(
@@ -325,7 +407,7 @@ class RecommendationService:
                         "status": "revalidation_unavailable",
                     }
                 )
-            self._save_revalidation(context, checked_at, revalidated_facts)
+            self._save_revalidation(context, checked_at, revalidated_facts, [])
             return self._with_greeting(plan, _FALLBACK)
 
     @staticmethod
@@ -340,14 +422,93 @@ class RecommendationService:
             sandbox=offer.sandbox,
         )
 
+    def _reuse_previous(
+        self,
+        previous_recommendation: object,
+        intent: Intent,
+        *,
+        update_id: int,
+        correlation_id: UUID,
+    ) -> RecommendationPlan | None:
+        previous = RecommendationPlan.from_dict(previous_recommendation)
+        if previous is None or not previous.presented_game_ids:
+            return None
+        if intent.style and not self._same(intent.style, previous.intent.style or ""):
+            return None
+        candidates = {item.game_id: item for item in previous.candidates}
+        presented_ids = set(previous.presented_game_ids)
+        reused_candidates: list[RecommendationCandidateSnapshot] = []
+        reused_ranking: list[RankedGame] = []
+        for ranked in previous.ranking:
+            if ranked.game_id not in presented_ids:
+                continue
+            candidate = candidates.get(ranked.game_id)
+            if candidate is None:
+                continue
+            if intent.platform and not self._same(intent.platform, candidate.platform):
+                continue
+            if intent.genre and (
+                candidate.genre is None
+                or not self._same(intent.genre, candidate.genre)
+            ):
+                continue
+            offers = tuple(
+                offer
+                for offer in candidate.offers
+                if self._offer_snapshot_matches(offer, intent)
+            )
+            if not offers:
+                continue
+            reused_candidates.append(replace(candidate, offers=offers))
+            reused_ranking.append(ranked)
+        if not reused_candidates:
+            return None
+        provenance = RecommendationProvenance(
+            recommendation_version=RECOMMENDATION_VERSION,
+            ranking_prompt_version=RANKING_PROMPT_VERSION,
+            intent_version=INTENT_VERSION,
+            workflow_version=self.workflow_version,
+            configuration_version=self.configuration_version,
+            model_snapshot=self.model_snapshot,
+            source_update_id=update_id,
+            correlation_id=correlation_id,
+        )
+        return RecommendationPlan(
+            provenance=provenance,
+            intent=intent,
+            candidates=tuple(reused_candidates),
+            ranking=tuple(reused_ranking),
+            greeting_required=previous.greeting_required,
+            reused_previous_options=True,
+        )
+
+    @staticmethod
+    def _offer_snapshot_matches(offer: RecommendationOfferSnapshot, intent: Intent) -> bool:
+        return bool(
+            offer.available_units > 0
+            and (intent.mode is None or offer.mode == intent.mode)
+            and (
+                intent.price_min_brl_cents is None
+                or offer.price_minor >= intent.price_min_brl_cents
+            )
+            and (
+                intent.price_max_brl_cents is None
+                or offer.price_minor <= intent.price_max_brl_cents
+            )
+        )
+
     @staticmethod
     def _save_revalidation(
-        context: object, checked_at: str, facts: list[dict[str, object]]
+        context: object,
+        checked_at: str,
+        facts: list[dict[str, object]],
+        presented_game_ids: list[str],
     ) -> None:
-        if type(context) is dict and facts:
-            cast(dict[str, object], context)["revalidation"] = {
-                "checked_at": checked_at, "facts": facts[:3]
-            }
+        if type(context) is dict:
+            raw = cast(dict[str, object], context)
+            if facts:
+                raw["revalidation"] = {"checked_at": checked_at, "facts": facts[:3]}
+            raw["presented_game_ids"] = presented_game_ids
 
     def _snapshot(
         self,
@@ -492,7 +653,13 @@ class RecommendationService:
         if not ranked or not self.public_site_url:
             return _FALLBACK
         candidate_by_id = {candidate.game_id: candidate for candidate in plan.candidates}
-        lines = ["Encontrei estas opções no catálogo que podem combinar com seu pedido:"]
+        if plan.reused_previous_options:
+            lines = [
+                "Não encontrei outra opção elegível com os critérios atuais sem repetir opções já vistas. "
+                "Reapresento as anteriores com as ofertas revalidadas agora:"
+            ]
+        else:
+            lines = ["Encontrei estas opções no catálogo que podem combinar com seu pedido:"]
         for index, ranked_game in enumerate(ranked, 1):
             game, offers = fresh[ranked_game.game_id]
             candidate = candidate_by_id[ranked_game.game_id]

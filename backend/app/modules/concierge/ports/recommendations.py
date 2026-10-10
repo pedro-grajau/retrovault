@@ -25,6 +25,8 @@ class Recommendations(Protocol):
         channel: str,
         update_id: int,
         correlation_id: UUID,
+        excluded_game_ids: tuple[UUID, ...] = (),
+        previous_recommendation: object = None,
     ) -> RecommendationOutcome: ...
 
     def revalidate_and_compose(self, context: object) -> str: ...

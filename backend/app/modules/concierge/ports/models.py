@@ -35,7 +35,11 @@ class ModelCallFailure(RuntimeError):
 
 class ModelGateway(Protocol):
     def input_token_upper_bound(
-        self, message_text: str, previous_intent: Intent | None
+        self,
+        message_text: str,
+        previous_intent: Intent | None,
+        *,
+        previous_options: list[dict[str, str]] | None = None,
     ) -> int: ...
 
     def extract_intent(
@@ -44,6 +48,7 @@ class ModelGateway(Protocol):
         previous_intent: Intent | None,
         *,
         correlation_id: UUID,
+        previous_options: list[dict[str, str]] | None = None,
     ) -> ModelExtraction: ...
 
     def ranking_input_token_upper_bound(

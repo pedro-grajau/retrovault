@@ -26,6 +26,7 @@ from app.modules.concierge.application.context_reference import (
     ContextReferencesUnavailable,
     InvalidContextReference,
 )
+from app.modules.concierge.application.demand import DemandService
 from app.modules.concierge.application.handoff import HandoffService
 from app.modules.concierge.application.intent_extraction import IntentExtractionService
 from app.modules.concierge.application.session_workflow import (
@@ -70,6 +71,7 @@ def configure_services(
     intent_extraction_service: IntentExtractionService | None = None,
     recommendation_service: Recommendations | None = None,
     handoff_store: HandoffStore | None = None,
+    demand_service: DemandService | None = None,
     telegram_messenger: TelegramMessenger | None = None,
     webhook_secret: str = "",
     allowed_user_ids: frozenset[int] = frozenset(),
@@ -78,9 +80,15 @@ def configure_services(
     message_max_age_seconds: int = 900,
     retention_days: int = 30,
     typing_threshold_seconds: float = 3.0,
+    max_failed_refinement_rounds: int = 3,
 ) -> None:
     global _context_references, _telegram_bot_username, _session_store
-    global _session_workflow, _handoff_service, _telegram_messenger, _telegram_updates, _webhook_secret
+    global \
+        _session_workflow, \
+        _handoff_service, \
+        _telegram_messenger, \
+        _telegram_updates, \
+        _webhook_secret
     global _telegram_bot_token_configured, _allowed_user_ids
     global _webhook_max_body_bytes, _retention_days
     global _typing_threshold_seconds, _retention_checked_at
@@ -100,7 +108,9 @@ def configure_services(
             intent_extraction=intent_extraction_service,
             recommendations=recommendation_service,
             handoff_service=_handoff_service,
+            demand_service=demand_service,
             max_message_age_seconds=message_max_age_seconds,
+            max_failed_refinement_rounds=max_failed_refinement_rounds,
         )
         if session_store is not None and checkpointer_factory is not None
         else None
@@ -190,7 +200,9 @@ async def create_context_reference(
         except InvalidContextReference as exc:
             raise HTTPException(status_code=404, detail="not_found") from exc
         except ContextReferencesUnavailable as exc:
-            raise HTTPException(status_code=503, detail="concierge_unavailable") from exc
+            raise HTTPException(
+                status_code=503, detail="concierge_unavailable"
+            ) from exc
         expires_at = verified.expires_at.isoformat().replace("+00:00", "Z")
 
     username = quote(_telegram_bot_username, safe="_")
@@ -218,7 +230,9 @@ async def validate_context_reference(
     try:
         verified = _context_reference_service().validate(request.reference)
     except InvalidContextReference as exc:
-        raise HTTPException(status_code=400, detail="invalid_context_reference") from exc
+        raise HTTPException(
+            status_code=400, detail="invalid_context_reference"
+        ) from exc
     except ContextReferencesUnavailable as exc:
         raise HTTPException(status_code=503, detail="concierge_unavailable") from exc
     return ContextReferenceValidationResponse(
@@ -236,7 +250,9 @@ async def _read_bounded_body(request: Request) -> bytes:
             if content_length < 0:
                 raise ValueError
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="invalid_content_length") from exc
+            raise HTTPException(
+                status_code=400, detail="invalid_content_length"
+            ) from exc
         if content_length > _webhook_max_body_bytes:
             raise HTTPException(status_code=413, detail="telegram_update_too_large")
     body = bytearray()
@@ -340,7 +356,7 @@ async def telegram_webhook(request: Request) -> dict[str, str | bool]:
     raw_body = await _read_bounded_body(request)
     try:
         payload = json.loads(raw_body)
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         return {"ok": True, "status": "ignored"}
     try:
         message = _telegram_updates.normalize(
@@ -371,7 +387,9 @@ async def telegram_webhook(request: Request) -> dict[str, str | bool]:
     except HTTPException:
         raise
     except TelegramUnavailable as exc:
-        raise HTTPException(status_code=503, detail="telegram_delivery_unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="telegram_delivery_unavailable"
+        ) from exc
     except ContextReferencesUnavailable as exc:
         raise HTTPException(status_code=503, detail="concierge_unavailable") from exc
     except Exception as exc:

@@ -6,6 +6,18 @@
   "version_key": "recommendation_version+source_update_id",
   "maximum_candidates": 20,
   "maximum_recommendations": 3,
+  "delivery_context": {
+    "presented_game_ids_recorded_after_composition": true,
+    "rejection_source": "latest-delivered-recommendation",
+    "ranked_options_filtered_by_presented_ids": true,
+    "legacy_context_without_presented_ids": "exact-delivered-game-links-only"
+  },
+  "rejected_game_ids_excluded_before_ranking": true,
+  "reused_previous_options": {
+    "allowed_only_when_no_alternative_is_eligible": true,
+    "requires_objective_explanation": true,
+    "revalidated_before_delivery": true
+  },
   "editorial_match_evidence": {
     "fields": ["title", "genre", "description", "developer", "publisher", "edition"],
     "maximum_value_chars": 240,

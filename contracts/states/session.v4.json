@@ -1,0 +1,39 @@
+{
+  "owner": "concierge",
+  "version": 4,
+  "status": "active",
+  "state_machine": "conversation-session",
+  "workflow_version": "2.5.v1",
+  "checkpoint_store": "PostgreSQL LangGraph PostgresSaver",
+  "checkpoint_payloads": [
+    "versioned-intent",
+    "intent-revisions",
+    "refinement-ledger",
+    "last-recommendation-plan",
+    "candidate-evidence",
+    "sanitized-demand-clarification-draft"
+  ],
+  "intent_contract": "intent.v2.json",
+  "refinement_contract": "refinement.v1.json",
+  "recommendation_contract": "recommendation.v1.json",
+  "outbox_recommendation_context": "current-turn-only-and-revalidated-before-delivery",
+  "last_recommendation_context": "latest-delivered-recommendation-context",
+  "rejection_targets": "ranked-options-with-recorded-presented-game-ids",
+  "raw_message_retained_in_checkpoint": false,
+  "deduplication": "channel-and-update_id",
+  "message_processing_lease": "fenced-by-lease-token",
+  "outbox_delivery": "leased-with-skip-locked-claims-and-independent-redrive",
+  "late_or_out_of_order_handling": "persist-for-reconciliation-without-automatic-reply",
+  "retention_days_config": "PIXEL_TELEGRAM_RETENTION_DAYS",
+  "retention_days_default": 30,
+  "max_failed_refinement_rounds_config": "PIXEL_MAX_FAILED_REFINEMENT_ROUNDS",
+  "max_failed_refinement_rounds_default": 3,
+  "demand_contract": "demand.v1.json",
+  "intent_prompt": "intent-extraction.v4",
+  "deterministic_commands": [
+    "/demanda",
+    "/demandas",
+    "/confirmar_demanda",
+    "/cancelar_demanda"
+  ]
+}

@@ -457,6 +457,76 @@ function HomePage() {
   )
 }
 
+function DemandPanel({
+  game,
+  unavailableModes,
+}: {
+  game: GameResponse
+  unavailableModes: Array<"purchase" | "rental">
+}) {
+  const [selectedMode, setSelectedMode] = useState<"purchase" | "rental">(
+    unavailableModes[0] ?? "purchase",
+  )
+  const mode = unavailableModes.includes(selectedMode)
+    ? selectedMode
+    : (unavailableModes[0] ?? "purchase")
+  const [webContext, setWebContext] = useState(false)
+  return (
+    <section className="demand-panel" aria-labelledby="demand-heading">
+      <p className="eyebrow">AVISO DE DISPONIBILIDADE · SANDBOX</p>
+      <h3 id="demand-heading">Avise-me quando houver uma unidade</h3>
+      <p>
+        {game.title} — {game.platform}
+      </p>
+      <label htmlFor="demand-mode">Modalidade de interesse</label>
+      <select
+        id="demand-mode"
+        value={mode}
+        onChange={(event) =>
+          setSelectedMode(event.target.value as "purchase" | "rental")
+        }
+      >
+        {unavailableModes.map((unavailableMode) => (
+          <option value={unavailableMode} key={unavailableMode}>
+            {unavailableMode === "purchase" ? "Compra" : "Aluguel"}
+          </option>
+        ))}
+      </select>
+      <p>
+        Não há reserva, prioridade, garantia de aquisição ou prazo. O interesse
+        termina após o primeiro aviso entregue. Outro aviso exige novo
+        consentimento.
+      </p>
+      <p>
+        O cadastro e o cancelamento acontecem no canal da conversa, após sua
+        confirmação explícita.
+      </p>
+      <p>
+        Envie à Pixel:{" "}
+        <code>{`/demanda ${game.title} | ${game.platform} | ${mode === "purchase" ? "compra" : "aluguel"}`}</code>
+        . Depois use o comando de confirmação que ela fornecer. Consulte
+        /demandas e cancele com /cancelar_demanda seguido do código.
+      </p>
+      <PixelEntry gameId={game.id} />
+      <button
+        className="button-secondary"
+        type="button"
+        aria-expanded={webContext}
+        onClick={() => setWebContext(!webContext)}
+      >
+        Continuar pela Web
+      </button>
+      {webContext && (
+        <p role="status">
+          Você pode acompanhar a disponibilidade atual nesta página pela Web.
+          Para cadastrar ou cancelar um aviso, continue no Telegram com o
+          contexto deste jogo.
+        </p>
+      )}
+    </section>
+  )
+}
+
 function GameOffers({
   game,
   refreshing,
@@ -470,6 +540,9 @@ function GameOffers({
 }) {
   const offers = game.offers ?? []
   const availableOffers = offers.filter((offer) => offer.available_units > 0)
+  const unavailableModes = (["purchase", "rental"] as const).filter(
+    (mode) => !availableOffers.some((offer) => offer.mode === mode),
+  )
 
   return (
     <section className="detail-offers" aria-labelledby="offer-title">
@@ -500,104 +573,110 @@ function GameOffers({
           Tente atualizar mais tarde.
         </div>
       ) : availableOffers.length === 0 ? (
-        <div className="state-panel detail-unavailable" role="status">
-          <p>
+        <div className="state-panel detail-unavailable">
+          <p role="status">
             Nenhuma unidade física está disponível agora. Não há compra ou
             aluguel para iniciar.
           </p>
+          <DemandPanel game={game} unavailableModes={unavailableModes} />
         </div>
       ) : (
-        <div className="detail-offer-list">
-          {offers.map((offer) => (
-            <article className="detail-offer" key={offer.id}>
-              <div className="offer-overview">
-                <div>
-                  <p className="offer-mode">
-                    {modeLabel(offer.mode)}
-                    {offer.sandbox ? " · Sandbox" : ""}
-                  </p>
-                  <h3>{offer.sku_code ? `SKU ${offer.sku_code}` : "SKU"}</h3>
+        <>
+          <div className="detail-offer-list">
+            {offers.map((offer) => (
+              <article className="detail-offer" key={offer.id}>
+                <div className="offer-overview">
+                  <div>
+                    <p className="offer-mode">
+                      {modeLabel(offer.mode)}
+                      {offer.sandbox ? " · Sandbox" : ""}
+                    </p>
+                    <h3>{offer.sku_code ? `SKU ${offer.sku_code}` : "SKU"}</h3>
+                  </div>
+                  <strong className="detail-price">{formatPrice(offer)}</strong>
                 </div>
-                <strong className="detail-price">{formatPrice(offer)}</strong>
-              </div>
-              <p
-                className={
-                  offer.available_units > 0
-                    ? "availability available"
-                    : "availability unavailable"
-                }
-              >
-                {offer.available_units > 0
-                  ? `${offer.available_units} ${
-                      offer.available_units === 1
-                        ? "unidade disponível"
-                        : "unidades disponíveis"
-                    }`
-                  : "Indisponível no momento"}
-              </p>
-              {offer.units.length > 0 ? (
-                <div className="physical-unit-list">
-                  {offer.units.map((unit, index) => (
-                    <section
-                      className="physical-unit"
-                      key={`${offer.id}-${index}`}
-                    >
-                      <h4>Unidade física {index + 1}</h4>
+                <p
+                  className={
+                    offer.available_units > 0
+                      ? "availability available"
+                      : "availability unavailable"
+                  }
+                >
+                  {offer.available_units > 0
+                    ? `${offer.available_units} ${
+                        offer.available_units === 1
+                          ? "unidade disponível"
+                          : "unidades disponíveis"
+                      }`
+                    : "Indisponível no momento"}
+                </p>
+                {offer.units.length > 0 ? (
+                  <div className="physical-unit-list">
+                    {offer.units.map((unit, index) => (
+                      <section
+                        className="physical-unit"
+                        key={`${offer.id}-${index}`}
+                      >
+                        <h4>Unidade física {index + 1}</h4>
+                        <dl className="unit-facts">
+                          <div className="unit-fact">
+                            <dt>Condição</dt>
+                            <dd>
+                              {unit.condition_summary.trim() || "Não informado"}
+                            </dd>
+                          </div>
+                          <div className="unit-fact">
+                            <dt>Defeitos conhecidos</dt>
+                            <dd>
+                              {unit.defects == null
+                                ? "Não informado"
+                                : unit.defects.length
+                                  ? unit.defects.join("; ")
+                                  : "Nenhum defeito conhecido registrado"}
+                            </dd>
+                          </div>
+                          <div className="unit-fact">
+                            <dt>Itens inclusos</dt>
+                            <dd>
+                              {unit.included_items == null
+                                ? "Não informado"
+                                : unit.included_items.length
+                                  ? unit.included_items.join(", ")
+                                  : "Nenhum item adicional registrado"}
+                            </dd>
+                          </div>
+                        </dl>
+                      </section>
+                    ))}
+                  </div>
+                ) : offer.available_units > 0 ? (
+                  <div className="physical-unit-list">
+                    <section className="physical-unit">
+                      <h4>Detalhes da unidade</h4>
                       <dl className="unit-facts">
                         <div className="unit-fact">
                           <dt>Condição</dt>
-                          <dd>
-                            {unit.condition_summary.trim() || "Não informado"}
-                          </dd>
+                          <dd>{offer.condition_summary || "Não informado"}</dd>
                         </div>
                         <div className="unit-fact">
                           <dt>Defeitos conhecidos</dt>
-                          <dd>
-                            {unit.defects == null
-                              ? "Não informado"
-                              : unit.defects.length
-                                ? unit.defects.join("; ")
-                                : "Nenhum defeito conhecido registrado"}
-                          </dd>
+                          <dd>Não informado</dd>
                         </div>
                         <div className="unit-fact">
                           <dt>Itens inclusos</dt>
-                          <dd>
-                            {unit.included_items == null
-                              ? "Não informado"
-                              : unit.included_items.length
-                                ? unit.included_items.join(", ")
-                                : "Nenhum item adicional registrado"}
-                          </dd>
+                          <dd>Não informado</dd>
                         </div>
                       </dl>
                     </section>
-                  ))}
-                </div>
-              ) : offer.available_units > 0 ? (
-                <div className="physical-unit-list">
-                  <section className="physical-unit">
-                    <h4>Detalhes da unidade</h4>
-                    <dl className="unit-facts">
-                      <div className="unit-fact">
-                        <dt>Condição</dt>
-                        <dd>{offer.condition_summary || "Não informado"}</dd>
-                      </div>
-                      <div className="unit-fact">
-                        <dt>Defeitos conhecidos</dt>
-                        <dd>Não informado</dd>
-                      </div>
-                      <div className="unit-fact">
-                        <dt>Itens inclusos</dt>
-                        <dd>Não informado</dd>
-                      </div>
-                    </dl>
-                  </section>
-                </div>
-              ) : null}
-            </article>
-          ))}
-        </div>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+          {unavailableModes.length > 0 && (
+            <DemandPanel game={game} unavailableModes={unavailableModes} />
+          )}
+        </>
       )}
     </section>
   )
@@ -780,7 +859,13 @@ function GameDetailPage({ gameId }: { gameId: string }) {
           refreshError={refreshError}
           onRefresh={() => void refresh()}
         />
-        <PixelEntry gameId={game.id} />
+        {(refreshError ||
+          game.commerce_status === "unavailable" ||
+          (["purchase", "rental"] as const).every((mode) =>
+            (game.offers ?? []).some(
+              (offer) => offer.mode === mode && offer.available_units > 0,
+            ),
+          )) && <PixelEntry gameId={game.id} />}
       </article>
     </main>
   )

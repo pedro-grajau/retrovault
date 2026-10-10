@@ -1,0 +1,41 @@
+{
+  "owner": "concierge",
+  "version": 1,
+  "status": "active",
+  "commands": {
+    "propose": {
+      "syntax": "/demanda título | plataforma | compra ou aluguel",
+      "effect": "proposed-only"
+    },
+    "confirm": {
+      "syntax": "/confirmar_demanda UUID",
+      "effect": "active-with-explicit-consent"
+    },
+    "list": {
+      "syntax": "/demandas",
+      "scope": "owner-and-channel"
+    },
+    "cancel": {
+      "syntax": "/cancelar_demanda UUID",
+      "effect": "idempotent-owner-only"
+    }
+  },
+  "model_can_consent": false,
+  "deduplication": [
+    "owner_key",
+    "channel",
+    "title_key",
+    "platform_key",
+    "mode"
+  ],
+  "limits": [
+    "no-reservation",
+    "no-priority",
+    "no-acquisition-guarantee",
+    "no-deadline"
+  ],
+  "internal_modes": [
+    "purchase",
+    "rental"
+  ]
+}

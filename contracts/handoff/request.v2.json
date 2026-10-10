@@ -1,0 +1,27 @@
+{
+  "owner": "concierge",
+  "version": 2,
+  "status": "active",
+  "request": "human-review",
+  "states": ["requested"],
+  "required": ["id", "session_id", "channel", "external_update_id", "correlation_id", "requested_at"],
+  "unique_key": ["channel", "external_update_id"],
+  "context_snapshot": {
+    "optional": true,
+    "version": "handoff-context.v1",
+    "fields": ["intent", "options_considered", "rejected_options", "correlation_id"],
+    "rejection_fields": ["game_id", "title", "reason", "source_update_id", "recommendation_update_id"],
+    "structured_only": true,
+    "raw_conversation_included": false,
+    "email_and_phone_substrings_redacted": true,
+    "unnecessary_pii_retained": false
+  },
+  "notification": {
+    "durable": true,
+    "idempotent": true,
+    "recipient_count": 1,
+    "conversation_text_included": false,
+    "session_claimed": false,
+    "contains": ["preferences", "constraints", "considered_or_rejected_options", "normalized_reasons", "correlation_id"]
+  }
+}

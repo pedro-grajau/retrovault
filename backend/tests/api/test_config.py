@@ -49,3 +49,16 @@ def test_telegram_user_allowlist_parses_comma_separated_ids() -> None:
     configured = Settings(pixel_telegram_allowed_user_ids="12345,67890")
 
     assert configured.telegram_user_allowlist == frozenset({12345, 67890})
+
+def test_demand_contact_retention_cannot_exceed_audit_retention():
+    with pytest.raises(
+        ValidationError, match="contact retention must not exceed audit retention"
+    ):
+        Settings(
+            pixel_demand_contact_retention_days=200,
+            pixel_demand_audit_retention_days=180,
+        )
+    configured = Settings(
+        pixel_demand_contact_retention_days=200, pixel_demand_audit_retention_days=200
+    )
+    assert configured.pixel_demand_contact_retention_days == 200
